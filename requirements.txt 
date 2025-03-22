@@ -1,0 +1,5 @@
+pip freeze > requirements.txt
+
+Flask==<version>
+flask-cors==<version>
+qiskit==0.43
