@@ -33,6 +33,10 @@ def msg(content, stop_reason):
             "usage": {"input_tokens": 10, "output_tokens": 10}}
 
 
+def first_error(events):
+    return next(d["message"] for e, d in events if e == "error")
+
+
 def parse_sse(text):
     events = []
     for chunk in text.strip().split("\n\n"):
@@ -146,7 +150,7 @@ def test_per_user_daily_message_cap():
             c.post("/api/v2/assistant/chat", json={"message": "hi"})
         events = parse_sse(c.post("/api/v2/assistant/chat", json={"message": "hi"}).text)
     assert len(api.requests) == 2
-    assert events[1][0] == "error" and "limit of 2" in events[1][1]["message"]
+    assert "limit of 2" in first_error(events)
 
 
 def test_global_budget_kill_switch():
@@ -158,7 +162,7 @@ def test_global_budget_kill_switch():
         db.record_usage("someone_else", "assistant_message", cost_usd=1.5)
         events = parse_sse(c.post("/api/v2/assistant/chat", json={"message": "hi"}).text)
     assert api.requests == []  # never reached Anthropic
-    assert "budget" in events[1][1]["message"]
+    assert "budget" in first_error(events)
 
 
 def test_per_user_dollar_cap():
@@ -169,7 +173,7 @@ def test_per_user_dollar_cap():
     with make_limited_app(api, Limits(user_daily_budget_usd=0.10)) as c:
         db.record_usage("dev_local", "assistant_message", cost_usd=0.11)
         events = parse_sse(c.post("/api/v2/assistant/chat", json={"message": "hi"}).text)
-    assert api.requests == [] and "usage limit" in events[1][1]["message"]
+    assert api.requests == [] and "usage limit" in first_error(events)
 
 
 def test_monthly_budget_cap():
@@ -180,4 +184,51 @@ def test_monthly_budget_cap():
     with make_limited_app(api, Limits(monthly_budget_usd=5.0, daily_budget_usd=100.0)) as c:
         db.record_usage("x", "assistant_message", cost_usd=5.0)
         events = parse_sse(c.post("/api/v2/assistant/chat", json={"message": "hi"}).text)
-    assert api.requests == [] and "month" in events[1][1]["message"]
+    assert api.requests == [] and "month" in first_error(events)
+
+
+def test_reservation_is_charged_when_the_run_fails():
+    """A failed model call keeps the worst-case reservation, so errors and disconnects can't dodge caps."""
+    from sqlmodel import Session, select
+
+    from app import db
+    api = FakeAPI((500, {"type": "error", "error": {"type": "api_error", "message": "boom"}}))
+    with make_app(api) as c:
+        c.post("/api/v2/assistant/chat", json={"message": "hi"})
+        assistant = c.app.state.assistant
+        with Session(db.engine()) as s:
+            ev = s.exec(select(db.UsageEvent).where(db.UsageEvent.kind == "assistant_message")).one()
+    assert ev.cost_usd == pytest.approx(assistant.worst_case_cost())
+
+
+def test_secret_tool_calls_are_capped_per_message():
+    tool_calls = [{"type": "tool_use", "id": f"tu_{i}", "name": "generate_password", "input": {"length": 16}}
+                  for i in range(1)]
+    responses = [(200, msg(tool_calls, "tool_use")) for _ in range(5)]
+    responses.append((200, msg([{"type": "text", "text": "done"}], "end_turn")))
+    api = FakeAPI(*responses)
+    from app.assistant.agent import Limits
+    with make_limited_app(api, Limits(max_tool_iterations=6)) as c:
+        events = parse_sse(c.post("/api/v2/assistant/chat", json={"message": "many"}).text)
+    assert sum(1 for e, _ in events if e == "secret") == 3
+    assert api.requests[0]["tool_choice"] == {"type": "auto", "disable_parallel_tool_use": True}
+
+
+def test_one_stream_per_user_at_a_time():
+    import asyncio
+
+    from app.assistant.agent import Assistant
+    from app.entropy.service import EntropyService as ES
+
+    a = Assistant(AsyncAnthropic(api_key="x"), "claude-opus-5-5", ES([]))
+
+    async def scenario():
+        first = await a._admit("u1")
+        second = await a._admit("u1")
+        other = await a._admit("u2")
+        return first, second, other
+
+    from app import db
+    db.init_db()
+    first, second, other = asyncio.run(scenario())
+    assert first[0] is not None and second[0] is None and "wait" in second[1] and other[0] is not None

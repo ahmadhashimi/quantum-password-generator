@@ -2,7 +2,7 @@
 
 import httpx
 
-from .base import EntropyError
+from .base import EntropyError, http_error
 
 MAX_PER_REQUEST = 1024
 
@@ -35,8 +35,10 @@ class ANUProvider:
             )
             r.raise_for_status()
             body = r.json()
-        except (httpx.HTTPError, ValueError) as e:
-            raise EntropyError(f"ANU request failed: {e.__class__.__name__}") from e
+        except httpx.HTTPError as e:
+            raise http_error("ANU", e) from e
+        except ValueError as e:
+            raise EntropyError("ANU returned invalid JSON") from e
         data = body.get("data") if isinstance(body, dict) else None
         if not body.get("success") or not isinstance(data, list) or len(data) != n:
             raise EntropyError("ANU returned malformed payload")

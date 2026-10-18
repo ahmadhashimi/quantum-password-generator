@@ -111,11 +111,13 @@ def clerk(monkeypatch):
     monkeypatch.setenv("ENVIRONMENT", "production")
     get_settings.cache_clear()
 
-    def token(sub="user_123", role=None, azp="http://localhost:5173", exp_in=60):
+    def token(sub="user_123", role=None, azp="http://localhost:5173", exp_in=60, fva=None):
         now = int(time.time())
         claims = {"sub": sub, "iat": now, "nbf": now, "exp": now + exp_in, "azp": azp, "sid": "sess_1",
                   "iss": "https://test.clerk.accounts.dev", "email": "a@b.co", "name": "Ada",
                   "metadata": {"role": role} if role else {}}
+        if fva is not None:
+            claims["fva"] = fva
         return jwt.encode(claims, key, algorithm="RS256")
 
     return token
@@ -149,7 +151,13 @@ def test_admin_stats_requires_admin(clerk):
     with make_client() as c:
         assert c.get("/api/v2/admin/stats", headers={"Authorization": f"Bearer {clerk()}"}).status_code == 403
         c.get("/api/v2/password", headers={"Authorization": f"Bearer {clerk()}"})
-        r = c.get("/api/v2/admin/stats", headers={"Authorization": f"Bearer {clerk('admin_1', role='admin')}"})
+        no_mfa = c.get("/api/v2/admin/stats", headers={"Authorization": f"Bearer {clerk('admin_1', role='admin')}"})
+        stale_mfa = c.get("/api/v2/admin/stats",
+                          headers={"Authorization": f"Bearer {clerk('admin_1', role='admin', fva=[5, 600])}"})
+        r = c.get("/api/v2/admin/stats",
+                  headers={"Authorization": f"Bearer {clerk('admin_1', role='admin', fva=[5, 2])}"})
+    assert no_mfa.status_code == 403 and "second factor" in no_mfa.json()["detail"]
+    assert stale_mfa.status_code == 403
     assert r.status_code == 200
     assert r.json()["users"] == 2 and r.json()["events"]["password"] == 1
 
@@ -201,3 +209,57 @@ def test_spoofed_forwarded_for_is_ignored_without_trusted_proxy(monkeypatch):
     with make_client() as c:
         codes = [c.get("/api/v2/password", headers={"X-Forwarded-For": f"10.0.0.{i}"}).status_code for i in range(3)]
     assert codes[-1] == 429  # rotating the header doesn't reset the limit
+
+
+def test_defaults_are_safe(monkeypatch):
+    """No ENVIRONMENT set: production mode, no auto-admin, localhost-only Host header."""
+    monkeypatch.delenv("ENVIRONMENT", raising=False)
+    monkeypatch.delenv("ALLOWED_HOSTS", raising=False)
+    get_settings.cache_clear()
+    from app.config import Settings
+
+    s = Settings(_env_file=None)
+    assert s.environment == "production" and s.allowed_hosts == ["localhost", "127.0.0.1"]
+    with TestClient(create_app(settings=s, entropy=EntropyService([FakeProvider("lfd")])),
+                    base_url="http://localhost") as c:
+        assert c.get("/api/v2/me").status_code == 401
+        assert c.get("/api/v2/health", headers={"Host": "evil.example"}).status_code == 400  # DNS rebinding
+
+
+def test_deleted_users_stay_deleted_and_stale_events_ignored():
+    from sqlmodel import Session
+
+    from app import db
+    db.init_db()
+    db.upsert_user("u1", "a@b.co", "Ada", event_ts=100)
+    db.upsert_user("u1", deleted=True, event_ts=200)
+    db.upsert_user("u1", "a@b.co", "Ada", event_ts=150)  # out-of-order retry
+    db.upsert_user("u1", "a@b.co", "Ada")  # later request with an old token
+    with Session(db.engine()) as s:
+        u = s.get(db.User, "u1")
+    assert u.deleted and u.email is None and u.name is None
+
+
+def test_body_size_limit(client):
+    r = client.post("/api/v2/receipts/verify", content=b"x" * 1_100_000, headers={"content-type": "application/json"})
+    assert r.status_code == 413
+
+
+def test_nul_byte_path_is_404_not_500(tmp_path, monkeypatch):
+    dist = tmp_path / "dist"
+    (dist / "assets").mkdir(parents=True)
+    (dist / "index.html").write_text("<html></html>")
+    monkeypatch.setenv("FRONTEND_DIST", str(dist))
+    get_settings.cache_clear()
+    with make_client() as c:
+        assert c.get("/foo%00bar").status_code == 404
+
+
+def test_production_csp_drops_clerk_wildcards(monkeypatch):
+    from app.config import Settings
+    from app.security import content_security_policy
+
+    s = Settings(_env_file=None, environment="production", clerk_hosts=["https://*.clerk.accounts.dev",
+                                                                         "https://clerk.example.com"])
+    csp = content_security_policy(s)
+    assert "accounts.dev" not in csp and "https://clerk.example.com" in csp

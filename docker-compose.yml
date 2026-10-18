@@ -9,9 +9,15 @@ services:
         WITH_IBM: "true"
     env_file: backend/.env
     environment:
+      # `environment` overrides env_file, so these can't be accidentally replaced by dev values.
       ENVIRONMENT: production
-      ALLOWED_HOSTS: '["${DOMAIN}"]'
+      ALLOWED_HOSTS: '["${DOMAIN}", "localhost"]'
       ALLOWED_ORIGINS: '["https://${DOMAIN}"]'
+      CLERK_HOSTS: '["https://clerk.${DOMAIN}"]'
+      DATABASE_URL: sqlite:////data/qpg.db
+      POOL_PATH: /data/entropy_pool.bin
+      SIGNING_KEY_PATH: /data/signing_keys.json
+      FORWARDED_ALLOW_IPS: 10.88.0.2
     volumes:
       - app-data:/data
     read_only: true
@@ -20,9 +26,12 @@ services:
     cap_drop: [ALL]
     restart: unless-stopped
     expose: ["8000"]
+    networks:
+      edge:
+        ipv4_address: 10.88.0.3
 
   caddy:
-    image: caddy:2.10-alpine
+    image: caddy:2.10-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
     environment:
       DOMAIN: ${DOMAIN:?set DOMAIN}
     ports: ["80:80", "443:443", "443:443/udp"]
@@ -32,6 +41,15 @@ services:
       - caddy-config:/config
     depends_on: [app]
     restart: unless-stopped
+    networks:
+      edge:
+        ipv4_address: 10.88.0.2
+
+networks:
+  edge:
+    ipam:
+      config:
+        - subnet: 10.88.0.0/29
 
 volumes:
   app-data:

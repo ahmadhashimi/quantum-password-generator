@@ -15,6 +15,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
 
+import anyio
 from anthropic import AsyncAnthropic, beta_async_tool
 from starlette.concurrency import run_in_threadpool
 
@@ -54,6 +55,11 @@ PRICING = {
 MAX_TURNS = 40
 CONVERSATION_TTL_S = 3600
 MAX_CONVERSATIONS = 1000
+MAX_CONVERSATIONS_PER_OWNER = 5
+MAX_SECRETS_PER_MESSAGE = 3
+STREAM_TIMEOUT_S = 90
+# Conservative input estimate per model call (system + tools + history) used to reserve cost up front.
+RESERVE_INPUT_TOKENS = 30_000
 
 
 @dataclass
@@ -76,6 +82,9 @@ class ConversationStore:
             c.touched = time.monotonic()
             self._items.move_to_end(conv_id)
             return conv_id, c
+        owned = [k for k, c in self._items.items() if c.owner == owner]
+        for k in owned[: max(0, len(owned) - MAX_CONVERSATIONS_PER_OWNER + 1)]:  # evict this owner's oldest only
+            del self._items[k]
         new_id = secrets.token_urlsafe(16)
         self._items[new_id] = Conversation(owner)
         return new_id, self._items[new_id]
@@ -107,22 +116,25 @@ def crack_time(bits: float, guesses_per_second: float = 1e12) -> str:
     return "instantly"
 
 
+def _prices(model: str) -> tuple[float, float, float, float]:
+    return PRICING.get(model, PRICING["claude-opus-5-5"])  # unknown model (e.g. a fallback): assume priciest
+
+
 @dataclass
 class TokenUsage:
     input: int = 0
     output: int = 0
-    cache_write: int = 0
-    cache_read: int = 0
+    usd: float = 0.0
 
-    def add(self, usage: Any) -> None:
-        self.input += usage.input_tokens or 0
-        self.output += usage.output_tokens or 0
-        self.cache_write += getattr(usage, "cache_creation_input_tokens", 0) or 0
-        self.cache_read += getattr(usage, "cache_read_input_tokens", 0) or 0
-
-    def cost(self, model: str) -> float:
-        p_in, p_out, p_write, p_read = PRICING.get(model, PRICING["claude-opus-5-5"])  # unknown: assume priciest
-        return (self.input * p_in + self.output * p_out + self.cache_write * p_write + self.cache_read * p_read) / 1e6
+    def add(self, usage: Any, model: str) -> None:
+        """Price each message by the model that actually served it (server-side fallback can switch models)."""
+        p_in, p_out, p_write, p_read = _prices(model)
+        inp, out = usage.input_tokens or 0, usage.output_tokens or 0
+        write = getattr(usage, "cache_creation_input_tokens", 0) or 0
+        read = getattr(usage, "cache_read_input_tokens", 0) or 0
+        self.input += inp
+        self.output += out
+        self.usd += (inp * p_in + out * p_out + write * p_write + read * p_read) / 1e6
 
 
 def _sse(event: str, data: dict) -> str:
@@ -132,7 +144,7 @@ def _sse(event: str, data: dict) -> str:
 @dataclass
 class Limits:
     daily_messages_per_user: int = 50
-    user_daily_budget_usd: float = 0.50
+    user_daily_budget_usd: float = 1.00
     daily_budget_usd: float = 10.0
     monthly_budget_usd: float = 150.0
     max_tokens: int = 1500
@@ -146,6 +158,28 @@ class Assistant:
         self.entropy = entropy
         self.limits = limits or Limits()
         self.store = ConversationStore()
+        self._admission = asyncio.Lock()
+        self._in_flight: set[str] = set()
+
+    def worst_case_cost(self) -> float:
+        p_in, p_out, _, _ = _prices(self.model)
+        per_call = (self.limits.max_tokens * p_out + RESERVE_INPUT_TOKENS * p_in) / 1e6
+        return round(self.limits.max_tool_iterations * per_call, 6)
+
+    async def _admit(self, user_id: str) -> tuple[int | None, str | None]:
+        """Atomically check caps and reserve worst-case cost, so concurrent or abandoned requests can't overspend.
+
+        One stream per user at a time; the reservation row counts toward every cap until it is settled.
+        """
+        async with self._admission:
+            if user_id in self._in_flight:
+                return None, "Please wait for the current answer to finish."
+            if reason := await self._blocked_reason(user_id):
+                return None, reason
+            event_id = await run_in_threadpool(db.record_usage, user_id, "assistant_message",
+                                               cost_usd=self.worst_case_cost())
+            self._in_flight.add(user_id)
+            return event_id, None
 
     async def _blocked_reason(self, user_id: str) -> str | None:
         """Check spend caps before calling the model. Password generation is never affected."""
@@ -162,6 +196,13 @@ class Assistant:
 
     def _tools(self, user_id: str | None, outbox: list[dict]) -> list:
         entropy = self.entropy
+        issued = {"n": 0}
+
+        def _over_limit() -> str | None:
+            issued["n"] += 1
+            if issued["n"] > MAX_SECRETS_PER_MESSAGE:
+                return json.dumps({"error": f"Limit: at most {MAX_SECRETS_PER_MESSAGE} secrets per message."})
+            return None
 
         async def _emit_secret(kind: str, value: str, bits: float, prov: dict, **meta: Any) -> dict:
             sid = secrets.token_urlsafe(8)
@@ -188,8 +229,10 @@ class Assistant:
                 symbols: Include symbols.
                 exclude_ambiguous: Leave out look-alike characters such as l, 1, O and 0.
             """
+            if err := _over_limit():
+                return err
             length = max(8, min(128, int(length)))
-            res = await entropy.get_stream()
+            res = await entropy.get_stream(use_pool=False)
             pw, bits = generate_password(res.stream, PasswordOptions(length, upper, lower, digits, symbols,
                                                                      exclude_ambiguous))
             return json.dumps(await _emit_secret("password", pw, bits, res.provenance.as_dict(), length=length))
@@ -205,9 +248,11 @@ class Assistant:
                 capitalize: Capitalize each word.
                 add_number: Append a random two-digit number.
             """
+            if err := _over_limit():
+                return err
             words = max(4, min(12, int(words)))
             separator = separator if separator in ("-", "_", ".", " ", "") else "-"
-            res = await entropy.get_stream()
+            res = await entropy.get_stream(use_pool=False)
             phrase, bits = generate_passphrase(res.stream, words, separator, capitalize, add_number)
             return json.dumps(await _emit_secret("passphrase", phrase, bits, res.provenance.as_dict(), words=words))
 
@@ -215,9 +260,7 @@ class Assistant:
         async def entropy_status() -> str:
             """Report which quantum entropy sources are online, their health-test state and the IBM pool size."""
             st = entropy.status()
-            return json.dumps({"quantum_available": st["quantum_available"], "providers": [
-                {k: p.get(k) for k in ("name", "configured", "available", "pool_bytes", "last_backend", "last_error")}
-                for p in st["providers"]]})
+            return json.dumps({"quantum_available": st["quantum_available"], "providers": st["providers"]})
 
         @beta_async_tool
         async def estimate_crack_time(entropy_bits: float) -> str:
@@ -233,56 +276,67 @@ class Assistant:
         return [generate_password_tool, generate_passphrase_tool, entropy_status, estimate_crack_time]
 
     async def chat(self, user_id: str, conv_id: str | None, text: str) -> AsyncIterator[str]:
-        conv_id, conv = self.store.get_or_create(conv_id, user_id)
-        yield _sse("conversation", {"id": conv_id})
-        if conv.turns >= MAX_TURNS:
-            yield _sse("error", {"message": "This conversation is full. Start a new chat."})
-            return
-        if reason := await self._blocked_reason(user_id):
+        event_id, reason = await self._admit(user_id)
+        if event_id is None:
             yield _sse("error", {"message": reason})
             yield _sse("done", {})
             return
-        conv.turns += 1
-        conv.messages.append({"role": "user", "content": text})
-        outbox: list[dict] = []
-        usage = TokenUsage()
+        usage, completed = TokenUsage(), False
         try:
-            runner = self.client.beta.messages.tool_runner(
-                model=self.model,
-                max_tokens=self.limits.max_tokens,
-                system=SYSTEM_PROMPT,
-                cache_control={"type": "ephemeral"},  # system + tools + history are re-sent every turn
-                tools=self._tools(user_id, outbox),
-                messages=list(conv.messages),
-                thinking={"type": "adaptive"},
-                output_config={"effort": "low"},
-                betas=["server-side-fallback-2026-07-01"],
-                fallbacks="default",
-                max_iterations=self.limits.max_tool_iterations,
-            )
-            async for message in runner:
-                usage.add(message.usage)
-                conv.messages.append({"role": "assistant", "content": message.content})
-                for block in message.content:
-                    if block.type == "text" and block.text:
-                        yield _sse("text", {"text": block.text})
-                    elif block.type == "tool_use":
-                        yield _sse("tool", {"name": block.name})
-                if message.stop_reason == "refusal":
-                    yield _sse("error", {"message": "The assistant can't help with that request."})
-                    break
-                tool_response = await runner.generate_tool_call_response()
-                for item in outbox:
-                    yield _sse("secret", item)
-                outbox.clear()
-                if tool_response is not None:
-                    conv.messages.append(tool_response)
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:  # surface a friendly error; details stay in server logs
-            log.exception("assistant error")
-            yield _sse("error", {"message": f"Assistant unavailable ({e.__class__.__name__})."})
+            conv_id, conv = self.store.get_or_create(conv_id, user_id)
+            yield _sse("conversation", {"id": conv_id})
+            if conv.turns >= MAX_TURNS:
+                yield _sse("error", {"message": "This conversation is full. Start a new chat."})
+                completed = True
+                return
+            conv.turns += 1
+            conv.messages.append({"role": "user", "content": text})
+            outbox: list[dict] = []
+            try:
+                async with asyncio.timeout(STREAM_TIMEOUT_S):
+                    runner = self.client.beta.messages.tool_runner(
+                        model=self.model,
+                        max_tokens=self.limits.max_tokens,
+                        system=SYSTEM_PROMPT,
+                        cache_control={"type": "ephemeral"},  # system + tools + history are re-sent every turn
+                        tools=self._tools(user_id, outbox),
+                        tool_choice={"type": "auto", "disable_parallel_tool_use": True},
+                        messages=list(conv.messages),
+                        thinking={"type": "adaptive"},
+                        output_config={"effort": "low"},
+                        betas=["server-side-fallback-2026-07-01"],
+                        fallbacks="default",
+                        max_iterations=self.limits.max_tool_iterations,
+                    )
+                    async for message in runner:
+                        usage.add(message.usage, getattr(message, "model", self.model))
+                        conv.messages.append({"role": "assistant", "content": message.content})
+                        for block in message.content:
+                            if block.type == "text" and block.text:
+                                yield _sse("text", {"text": block.text})
+                            elif block.type == "tool_use":
+                                yield _sse("tool", {"name": block.name})
+                        if message.stop_reason == "refusal":
+                            yield _sse("error", {"message": "The assistant can't help with that request."})
+                            break
+                        tool_response = await runner.generate_tool_call_response()
+                        for item in outbox:
+                            yield _sse("secret", item)
+                        outbox.clear()
+                        if tool_response is not None:
+                            conv.messages.append(tool_response)
+                completed = True
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # surface a friendly error; details stay in server logs
+                log.exception("assistant error")
+                yield _sse("error", {"message": f"Assistant unavailable ({e.__class__.__name__})."})
+            yield _sse("done", {})
         finally:
-            await run_in_threadpool(db.record_usage, user_id, "assistant_message", input_tokens=usage.input,
-                                    output_tokens=usage.output, cost_usd=round(usage.cost(self.model), 6))
-        yield _sse("done", {})
+            # Shielded so a client disconnect can't skip settlement. Failed or cancelled runs keep the
+            # worst-case reservation (they may have been billed); successful runs record the real cost.
+            reserved = self.worst_case_cost()
+            cost = round(usage.usd, 6) if completed else max(round(usage.usd, 6), reserved)
+            self._in_flight.discard(user_id)
+            with anyio.CancelScope(shield=True):
+                await run_in_threadpool(db.update_usage_cost, event_id, usage.input, usage.output, cost)

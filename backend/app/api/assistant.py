@@ -32,6 +32,7 @@ async def chat(request: Request, body: ChatRequest, user: Annotated[CurrentUser,
 
 
 @router.delete("/api/v2/assistant/conversations/{conv_id}")
+@limiter.limit(assistant_limit)
 async def delete_conversation(request: Request, conv_id: str, user: Annotated[CurrentUser, Depends(require_user)]):
     _assistant(request).store.delete(conv_id, user.id)
     return {"ok": True}

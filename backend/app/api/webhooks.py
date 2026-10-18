@@ -34,9 +34,10 @@ async def clerk_webhook(request: Request, s: Annotated[Settings, Depends(get_set
     except (WebhookVerificationError, ValueError) as e:
         raise HTTPException(400, "Invalid signature") from e
     kind, data = event.get("type"), event.get("data") or {}
-    if kind in ("user.created", "user.updated"):
+    ts = event.get("timestamp") if isinstance(event.get("timestamp"), int) else None
+    if kind in ("user.created", "user.updated") and isinstance(data.get("id"), str):
         name = " ".join(filter(None, [data.get("first_name"), data.get("last_name")])) or None
-        await run_in_threadpool(db.upsert_user, data["id"], _primary_email(data), name)
-    elif kind == "user.deleted" and data.get("id"):
-        await run_in_threadpool(db.upsert_user, data["id"], deleted=True)
+        await run_in_threadpool(db.upsert_user, data["id"], _primary_email(data), name, event_ts=ts)
+    elif kind == "user.deleted" and isinstance(data.get("id"), str):
+        await run_in_threadpool(db.upsert_user, data["id"], deleted=True, event_ts=ts)
     return {"ok": True}

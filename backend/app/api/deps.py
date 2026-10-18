@@ -9,3 +9,7 @@ def get_entropy(request: Request) -> EntropyService:
 
 def get_signer(request: Request):
     return request.app.state.signer
+
+
+def get_keyring(request: Request):
+    return request.app.state.keyring

@@ -61,7 +61,7 @@ export function VerifyPage({ receiptId }: { receiptId: string }) {
           <input value={id} onChange={(e) => setId(e.target.value)} required maxLength={64}
             className="w-full rounded-xl border border-slate-200 bg-white/70 px-4 py-2.5 font-mono font-normal outline-none focus:ring-2 focus:ring-cyan-400 dark:border-white/10 dark:bg-black/30" />
         </label>
-        {p?.kind === "draw" && (
+        {(p?.kind === "draw" || p?.kind === "draw_commit") && (
           <label className="block space-y-2 text-sm font-medium">
             Published entries list (optional) — one per line
             <textarea value={entries} onChange={(e) => setEntries(e.target.value)} rows={5}
@@ -85,21 +85,44 @@ export function VerifyPage({ receiptId }: { receiptId: string }) {
             <Check ok={result.key_id_matches} label="Signed by this server's published key" />
             <Check ok={result.in_public_log} label="Recorded in the public receipt log" />
             <Check ok={result.entries_match} label="Entries list matches the signed fingerprint" />
+            {result.draw && (
+              <Check ok={result.draw.draws_by_anyone_over_same_entries === 1}
+                label={result.draw.draws_by_anyone_over_same_entries === 1
+                  ? "No other draw anywhere used this entry list"
+                  : `${result.draw.draws_by_anyone_over_same_entries} draws in total used this entry list`} />
+            )}
+            {result.draw && (
+              <Check ok={result.draw.draws_by_same_owner_over_same_entries === 1}
+                label={result.draw.draws_by_same_owner_over_same_entries === 1
+                  ? "Only draw this organiser ran over this entry list (no re-rolls)"
+                  : `Organiser ran ${result.draw.draws_by_same_owner_over_same_entries} draws over this entry list`} />
+            )}
           </ul>
+          {result.reason === "revoked_key" && <p className="text-sm text-rose-500">Signed with a key that has since been revoked.</p>}
+          {result.reason === "unknown_key" && <p className="text-sm text-rose-500">Signed with a key this server never published.</p>}
           <dl className="grid gap-3 text-sm sm:grid-cols-2">
             <div><dt className="text-slate-500">Type</dt><dd className="font-medium capitalize">{p.kind}</dd></div>
             <div><dt className="text-slate-500">Issued</dt><dd className="font-medium">{new Date(p.issued_at * 1000).toLocaleString()}</dd></div>
             <div><dt className="text-slate-500">Entropy sources</dt><dd className="font-medium">{p.provenance.sources.map(sourceLabel).join(" + ")}</dd></div>
             <div><dt className="text-slate-500">Quantum</dt><dd className="font-medium">{p.provenance.quantum ? `Yes · ${p.provenance.quantum_bytes} bytes` : "No"}</dd></div>
-            {p.provenance.ibm_job && (
-              <div className="sm:col-span-2"><dt className="text-slate-500">IBM Quantum job</dt>
-                <dd className="font-mono text-xs">{p.provenance.ibm_job.backend} · {p.provenance.ibm_job.job_id} ({p.provenance.ibm_job.mode})</dd></div>
+            {p.provenance.ibm_jobs?.map((job) => (
+              <div key={job.job_id} className="sm:col-span-2"><dt className="text-slate-500">IBM Quantum job</dt>
+                <dd className="font-mono text-xs">{job.backend} · {job.job_id} ({job.mode})</dd></div>
+            ))}
+            {p.kind === "draw_commit" && (
+              <div className="sm:col-span-2"><dt className="text-slate-500">Commitment</dt>
+                <dd className="font-medium">Entries locked before randomness: {p.details.entries_count} entries, {p.details.winners} winner(s)
+                  {result.draw && ` · status: ${result.draw.status}`}</dd></div>
             )}
             {p.entropy_bits !== null && <div><dt className="text-slate-500">Entropy</dt><dd className="font-medium">{p.entropy_bits} bits</dd></div>}
           </dl>
+          {result.draw?.committed_seconds_before_run != null && (
+            <p className="text-sm text-slate-500">Entries were locked {result.draw.committed_seconds_before_run} s before the draw ran.</p>
+          )}
           {p.result && (
-            <div className="space-y-2 text-sm">
-              <p className="font-medium">{p.result.title} — {p.result.entries_count} entries</p>
+            <div className="space-y-2 rounded-xl border border-dashed border-slate-300 p-3 text-sm dark:border-white/15">
+              <p className="text-xs tracking-wide text-slate-500 uppercase">Text supplied by the organiser — not checked by us</p>
+              <p className="font-medium">{p.details.title} — {p.details.entries_count} entries</p>
               <ol className="list-decimal space-y-1 pl-5">
                 {p.result.winners.map((w) => <li key={w.index}>{w.entry} <span className="text-slate-500">(entry #{w.index + 1})</span></li>)}
               </ol>

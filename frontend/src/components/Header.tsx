@@ -1,4 +1,4 @@
-import { SignInButton, UserButton, Show } from "@clerk/react";
+import { SignInButton, SignUpButton, UserButton, Show } from "@clerk/react";
 import { BarChart3, FileSearch, Gift, Moon, Sparkles, Sun } from "lucide-react";
 import { useAppAuth } from "../lib/auth";
 
@@ -42,8 +42,11 @@ export function Header({ theme, onToggleTheme, onOpenAssistant, isAdmin }: Props
             <>
               <Show when="signed-out">
                 <SignInButton mode="modal">
-                  <button type="button" className="btn-primary h-9 px-4">Sign in</button>
+                  <button type="button" className="btn-ghost h-9 px-4">Sign in</button>
                 </SignInButton>
+                <SignUpButton mode="modal">
+                  <button type="button" className="btn-primary h-9 px-4">Sign up free</button>
+                </SignUpButton>
               </Show>
               <Show when="signed-in">
                 <UserButton />

@@ -1,97 +1,218 @@
-"""Public verification of signed receipts, signing keys, and provably fair draws."""
+"""Public verification of signed receipts, signing keys, and commit-then-run provably fair draws.
+
+Draw protocol (prevents re-rolling until a favoured entry wins):
+1. Commit: the organiser submits title + entries + winner count. We store them and return a signed
+   *commit receipt* (entries fingerprint, no randomness yet) that the organiser publishes first.
+2. Run: exactly once per draw (atomic status change), randomness is drawn and a signed *result receipt*
+   references the commit. Every draw is in the public log, and verification reports how many draws the
+   same organiser created over the same entry list, so grinding attempts are visible.
+"""
 
 import hashlib
 import json
-from typing import Annotated
+import re
+import secrets
+import unicodedata
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from starlette.concurrency import run_in_threadpool
 
 from .. import db
 from ..auth import CurrentUser, optional_user
+from ..config import Settings, get_settings
 from ..generator import draw_winners
-from ..ratelimit import general_limit, limiter
-from ..receipts import build_receipt, check_commitment, verify_signatures
-from .deps import get_entropy, get_signer
+from ..ratelimit import DRAWS_PER_USER_PER_DAY, general_limit, limiter
+from ..receipts import build_receipt, check_commitment, verify_receipt
+from .deps import get_entropy, get_keyring, get_signer
 
 router = APIRouter()
 MaybeUser = Annotated[CurrentUser | None, Depends(optional_user)]
+MAX_ENTRIES = 10_000
+MAX_ENTRIES_BYTES = 256_000
+MAX_WINNERS = 100
+_LINE_BREAKS = {"\u2028", "\u2029", "\x85"}
+_URLISH = re.compile(r"(https?://|www\.|\b[a-z0-9-]+\.(com|net|org|io|xyz|app|co|gg|me|link|ru|cn)\b)", re.I)
+
+
+def normalize_entry(raw: str) -> str:
+    """NFC-normalise and trim; reject control characters so every client reproduces the same list."""
+    entry = unicodedata.normalize("NFC", raw).strip()
+    if not entry or len(entry) > 200:
+        raise ValueError("Entries must be 1-200 characters")
+    if any(unicodedata.category(ch).startswith("C") or ch in _LINE_BREAKS for ch in entry):
+        raise ValueError("Entries can't contain control characters or line breaks")
+    return entry
+
+
+def normalize_entries(raw: list[str]) -> list[str]:
+    """Normalise, reject duplicates, and sort into one canonical order.
+
+    Sorting makes the fingerprint order-independent, so an organiser can't disguise re-rolls by shuffling the
+    list; winner indexes refer to this canonical order, which any verifier reproduces from the published list.
+    """
+    entries = [normalize_entry(e) for e in raw]
+    seen: set[str] = set()
+    for e in entries:
+        key = e.casefold()
+        if key in seen:
+            raise ValueError(f"Duplicate entry: {e!r}")
+        seen.add(key)
+    return sorted(entries)
 
 
 def entries_hash(entries: list[str]) -> str:
-    """SHA-256 of the entries as a JSON array — the organiser publishes the list, anyone can recompute this."""
+    """SHA-256 of the normalised entries as a compact JSON array — anyone can recompute it from the list."""
     return hashlib.sha256(json.dumps(entries, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
 
 
 @router.get("/api/v2/receipts/keys")
 @router.get("/.well-known/quantumpass-keys.json", include_in_schema=False)
+@limiter.limit(general_limit)
 async def signing_keys(request: Request):
-    return {"algorithms": ["ed25519", "ml-dsa-65"], "keys": [get_signer(request).public_keys()]}
+    return {"algorithms": ["ed25519", "ml-dsa-65"], "keys": get_keyring(request).public()}
 
 
 @router.get("/api/v2/receipts/{receipt_id}")
-async def get_receipt(receipt_id: str):
+@limiter.limit(general_limit)
+async def get_receipt(request: Request, receipt_id: str):
     r = await run_in_threadpool(db.get_receipt, receipt_id[:64])
     if r is None:
         raise HTTPException(404, "Receipt not found")
     return r
 
 
+class ReceiptIn(BaseModel):
+    payload: dict[str, Any]
+    signatures: dict[str, Annotated[str, Field(max_length=8192)]]
+    algorithms: list[str] | None = None
+
+
 class VerifyRequest(BaseModel):
-    receipt: dict | None = None
+    receipt: ReceiptIn | None = None
     receipt_id: str | None = Field(default=None, max_length=64)
     value: str | None = Field(default=None, max_length=4096)
     salt: str | None = Field(default=None, max_length=128)
-    entries: list[str] | None = Field(default=None, max_length=10_000)
+    entries: list[Annotated[str, Field(max_length=400)]] | None = Field(default=None, max_length=MAX_ENTRIES)
 
 
 @router.post("/api/v2/receipts/verify")
 @limiter.limit(general_limit)
 async def verify(request: Request, body: VerifyRequest):
-    receipt = body.receipt or (body.receipt_id and await run_in_threadpool(db.get_receipt, body.receipt_id))
-    if not receipt or "payload" not in receipt or "signatures" not in receipt:
+    if body.receipt:
+        receipt = body.receipt.model_dump()
+    elif body.receipt_id:
+        receipt = await run_in_threadpool(db.get_receipt, body.receipt_id)
+    else:
+        receipt = None
+    if not receipt:
         raise HTTPException(422, "Provide a receipt or a known receipt_id")
     payload = receipt["payload"]
-    keys = get_signer(request).public_keys()
-    sigs = verify_signatures(payload, receipt["signatures"], keys)
-    result = {
-        "valid": all(sigs.values()) and payload.get("key_id") == keys["key_id"],
-        "signatures": sigs,
-        "key_id_matches": payload.get("key_id") == keys["key_id"],
-        "in_public_log": await run_in_threadpool(db.get_receipt, payload.get("receipt_id", "")) is not None,
+    check = verify_receipt(payload, receipt["signatures"], get_keyring(request))
+    rid = payload.get("receipt_id")
+    stored = await run_in_threadpool(db.get_receipt, rid) if isinstance(rid, str) else None
+    result: dict[str, Any] = {
+        **check,
+        "key_id_matches": check.get("reason") != "unknown_key",
+        "in_public_log": stored is not None and stored["payload"] == payload,
         "payload": payload,
     }
-    if body.value is not None and body.salt:
+    if check["valid"] and body.value is not None and body.salt:
         result["commitment_matches"] = check_commitment(payload, body.value, body.salt)
     if body.entries is not None:
-        result["entries_match"] = (payload.get("result") or {}).get("entries_sha256") == entries_hash(body.entries)
+        try:
+            normalized = normalize_entries(body.entries)
+            result["entries_match"] = (payload.get("details") or {}).get("entries_sha256") == entries_hash(normalized)
+        except ValueError:
+            result["entries_match"] = False
+    if payload.get("kind") in ("draw_commit", "draw") and isinstance(rid, str):
+        draw = await run_in_threadpool(db.draw_for_receipt, rid)
+        if draw:
+            result["draw"] = {
+                "draw_id": draw.id,
+                "status": draw.status,
+                "commit_receipt_id": draw.commit_receipt_id,
+                "result_receipt_id": draw.result_receipt_id,
+                "draws_by_same_owner_over_same_entries": await run_in_threadpool(
+                    db.sibling_draws, draw.owner_id, draw.entries_sha256),
+                "draws_by_anyone_over_same_entries": await run_in_threadpool(
+                    db.sibling_draws, None, draw.entries_sha256, True),
+                "committed_seconds_before_run": draw.run_delay_s,
+            }
     return result
 
 
-class DrawRequest(BaseModel):
+class DrawCommit(BaseModel):
     title: str = Field(min_length=1, max_length=200)
-    entries: list[Annotated[str, Field(min_length=1, max_length=200)]] = Field(min_length=1, max_length=10_000)
-    winners: int = Field(default=1, ge=1, le=1000)
+    entries: list[Annotated[str, Field(max_length=400)]] = Field(min_length=1, max_length=MAX_ENTRIES)
+    winners: int = Field(default=1, ge=1, le=MAX_WINNERS)
+
+    @field_validator("title")
+    @classmethod
+    def _title(cls, v: str) -> str:
+        title = normalize_entry(v)
+        if _URLISH.search(title):
+            raise ValueError("Titles can't contain links")  # stops phishing text under an "Authentic" banner
+        return title
+
+    @field_validator("entries")
+    @classmethod
+    def _entries(cls, v: list[str]) -> list[str]:
+        entries = normalize_entries(v)
+        if sum(len(e.encode()) for e in entries) > MAX_ENTRIES_BYTES:
+            raise ValueError("Entry list is too large")
+        return entries
 
 
-@router.post("/api/v2/draw")
+def _owner(user: CurrentUser | None, s: Settings) -> str | None:
+    if user is None and s.environment != "development":
+        raise HTTPException(401, "Sign in to run draws")
+    return user.id if user else None
+
+
+@router.post("/api/v2/draws")
 @limiter.limit(general_limit)
-async def draw(request: Request, body: DrawRequest, user: MaybeUser):
+async def commit_draw(request: Request, body: DrawCommit, user: MaybeUser,
+                      s: Annotated[Settings, Depends(get_settings)]):
+    owner = _owner(user, s)
     if body.winners > len(body.entries):
         raise HTTPException(422, "More winners than entries")
-    res = await get_entropy(request).get_stream()
-    picked = draw_winners(res.stream, body.entries, body.winners)
+    if await run_in_threadpool(db.draws_today, owner) >= DRAWS_PER_USER_PER_DAY:
+        raise HTTPException(429, f"Daily limit of {DRAWS_PER_USER_PER_DAY} draws reached")
+    draw_id = secrets.token_urlsafe(12)
+    details = {"draw_id": draw_id, "title": body.title, "entries_count": len(body.entries),
+               "entries_sha256": entries_hash(body.entries), "winners": body.winners}
+    no_randomness = {"sources": [], "quantum": False, "quantum_bytes": 0, "mixed_with": "none"}
+    receipt, _ = build_receipt(get_signer(request), "draw_commit", no_randomness, details=details)
+    await run_in_threadpool(db.save_receipt, receipt, owner)
+    await run_in_threadpool(db.create_draw, db.Draw(
+        id=draw_id, owner_id=owner, title=body.title, entries_json=json.dumps(body.entries, ensure_ascii=False),
+        entries_sha256=details["entries_sha256"], entries_count=len(body.entries), winners=body.winners,
+        commit_receipt_id=receipt["payload"]["receipt_id"]))
+    return {"draw_id": draw_id, "commit_receipt": receipt,
+            "commit_url": f"/#/verify/{receipt['payload']['receipt_id']}"}
+
+
+@router.post("/api/v2/draws/{draw_id}/run")
+@limiter.limit(general_limit)
+async def run_draw(request: Request, draw_id: str, user: MaybeUser, s: Annotated[Settings, Depends(get_settings)]):
+    owner = _owner(user, s)
+    draw = await run_in_threadpool(db.claim_draw, draw_id[:64], owner)
+    if draw is None:
+        raise HTTPException(409, "Draw not found, not yours, or already run")
+    entries = json.loads(draw.entries_json or "[]")
+    res = await get_entropy(request).get_stream(owner)
+    picked = draw_winners(res.stream, entries, draw.winners)
     prov = res.provenance.as_dict()
-    public = {
-        "title": body.title,
-        "entries_count": len(body.entries),
-        "entries_sha256": entries_hash(body.entries),
-        "winners": [{"index": i, "entry": body.entries[i]} for i in picked],
-    }
-    receipt, _ = build_receipt(get_signer(request), "draw", prov, public_result=public)
-    await run_in_threadpool(db.save_receipt, receipt, user.id if user else None)
-    await run_in_threadpool(db.record_usage, user.id if user else None, "draw", length=len(body.entries),
+    public = {"winners": [{"index": i, "entry": entries[i]} for i in picked]}
+    details = {"draw_id": draw.id, "title": draw.title, "entries_count": draw.entries_count,
+               "entries_sha256": draw.entries_sha256, "winners": draw.winners,
+               "commit_receipt_id": draw.commit_receipt_id}
+    receipt, _ = build_receipt(get_signer(request), "draw", prov, public_result=public, details=details)
+    await run_in_threadpool(db.save_receipt, receipt, owner)
+    await run_in_threadpool(db.finish_draw, draw.id, receipt["payload"]["receipt_id"])
+    await run_in_threadpool(db.record_usage, owner, "draw", length=draw.entries_count,
                             sources=prov["sources"], quantum=prov["quantum"])
     receipt_id = receipt["payload"]["receipt_id"]
     return {"winners": public["winners"], "receipt": receipt, "verify_url": f"/#/verify/{receipt_id}"}

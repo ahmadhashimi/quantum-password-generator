@@ -10,6 +10,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from . import db
@@ -20,8 +21,8 @@ from .assistant.agent import Assistant, Limits
 from .config import Settings, get_settings
 from .entropy import EntropyService
 from .ratelimit import limiter
-from .receipts import Signer
-from .security import SecurityHeadersMiddleware, install_log_redaction
+from .receipts import Keyring, Signer
+from .security import BodySizeLimitMiddleware, SecurityHeadersMiddleware, install_log_redaction
 
 
 def create_app(settings: Settings | None = None, entropy: EntropyService | None = None,
@@ -32,9 +33,12 @@ def create_app(settings: Settings | None = None, entropy: EntropyService | None 
     async def lifespan(app: FastAPI):
         install_log_redaction()
         db.init_db()
+        db.purge_anonymous_receipts()
         client = httpx.AsyncClient(headers={"user-agent": "quantum-password-generator/2"})
         app.state.entropy = entropy or EntropyService.from_settings(s, client)
-        app.state.signer = signer or Signer.load_or_create(s.signing_key_path, s.signing_keys)
+        app.state.keyring = (Keyring(signer) if signer else
+                             Keyring.from_settings(s.signing_key_path, s.signing_keys, s.retired_signing_keys))
+        app.state.signer = app.state.keyring.active
         if app.state.entropy.harvester:
             app.state.entropy.harvester.start()
         app.state.assistant = assistant or (
@@ -66,17 +70,22 @@ def create_app(settings: Settings | None = None, entropy: EntropyService | None 
 
         @app.get("/{path:path}", include_in_schema=False)
         def spa(path: str):  # sync: filesystem checks run in the threadpool
-            if path.startswith("api/"):
+            if path.startswith("api/") or "\x00" in path or "\\" in path:
                 raise HTTPException(404)
             f = (dist / path).resolve()
             if path and f.is_file() and f.is_relative_to(dist.resolve()):
                 return FileResponse(f)
             return FileResponse(dist / "index.html")
 
+    app.add_middleware(SlowAPIMiddleware)
+    app.add_middleware(BodySizeLimitMiddleware, max_bytes=1_000_000)
     app.add_middleware(CORSMiddleware, allow_origins=s.allowed_origins, allow_credentials=True,
                        allow_methods=["GET", "POST", "DELETE"], allow_headers=["Authorization", "Content-Type"])
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=s.allowed_hosts)
     app.add_middleware(SecurityHeadersMiddleware, settings=s)
+    if s.environment != "development" and s.auth_enabled and not any(
+            "*" not in h and "accounts.dev" not in h for h in s.clerk_hosts):
+        logging.getLogger(__name__).warning("CLERK_HOSTS has no production Frontend API host; sign-in will be blocked")
     return app
 
 

@@ -42,7 +42,7 @@ def main() -> int:
         print(f"Entries list matches: {match}")
         ok &= match
     p = receipt["payload"]["provenance"]
-    print(f"Sources: {', '.join(p['sources'])}  quantum={p['quantum']}  ibm_job={p.get('ibm_job')}")
+    print(f"Sources: {', '.join(p['sources'])}  quantum={p['quantum']}  ibm_jobs={p.get('ibm_jobs')}")
     print("VALID" if ok else "INVALID")
     return 0 if ok else 1
 

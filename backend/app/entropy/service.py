@@ -21,6 +21,7 @@ from .mixer import KeyStream, derive_key
 from .pool import EntropyPool
 
 SEED_BYTES = 64
+FETCH_BYTES = 1024  # one upstream call buffers 16 seeds
 # ANU and LfD publish post-processed, full-entropy output; assess at 7 bits/byte to leave margin.
 LIVE_MIN_ENTROPY = 7.0
 BREAKER_THRESHOLD = 3
@@ -33,7 +34,7 @@ class Provenance:
     quantum: bool
     quantum_bytes: int
     failures: dict[str, str] = field(default_factory=dict)
-    ibm_job: dict | None = None
+    ibm_jobs: list[dict] | None = None
     timestamp: float = field(default_factory=time.time)
 
     def as_dict(self) -> dict:
@@ -47,8 +48,8 @@ class Provenance:
             "health": {"sp800_90b": "pass" if self.sources != ["os_csprng"] else "n/a"},
             "timestamp": self.timestamp,
         }
-        if self.ibm_job:
-            d["ibm_job"] = self.ibm_job
+        if self.ibm_jobs:
+            d["ibm_jobs"] = self.ibm_jobs
         return d
 
 
@@ -67,6 +68,17 @@ class _ProviderState:
     successes: int = 0
     last_error: str | None = None
     last_success_at: float | None = None
+    min_interval_s: float = 0.0  # minimum gap between upstream calls (protects paid quotas / free services)
+    buffer: bytearray = field(default_factory=bytearray)
+    last_fetch: float = float("-inf")
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+    def take(self, n: int) -> bytes | None:
+        if len(self.buffer) < n:
+            return None
+        out = bytes(self.buffer[:n])
+        del self.buffer[:n]
+        return out
 
     @property
     def usable(self) -> bool:
@@ -83,10 +95,12 @@ class _ProviderState:
             return "failing"
         return "ok" if self.successes else "untested"
 
-    def record_failure(self, reason: str) -> None:
+    def record_failure(self, reason: str, cooldown_s: float | None = None) -> None:
         self.consecutive_failures += 1
         self.last_error = reason
-        if self.consecutive_failures >= BREAKER_THRESHOLD:
+        if cooldown_s:  # auth/quota refusal: retrying soon only burns quota and annoys the provider
+            self.open_until = time.monotonic() + cooldown_s
+        elif self.consecutive_failures >= BREAKER_THRESHOLD:
             self.open_until = time.monotonic() + BREAKER_COOLDOWN_S
 
     def record_success(self) -> None:
@@ -96,9 +110,14 @@ class _ProviderState:
 
 
 class EntropyService:
-    def __init__(self, live: list[EntropyProvider], harvester: IBMHarvester | None = None):
-        self._live = [_ProviderState(p, HealthMonitor(LIVE_MIN_ENTROPY)) for p in live]
+    def __init__(self, live: list[EntropyProvider], harvester: IBMHarvester | None = None,
+                 min_intervals: dict[str, float] | None = None, pool_seeds_per_user_per_day: int = 20):
+        intervals = min_intervals or {}
+        self._live = [_ProviderState(p, HealthMonitor(LIVE_MIN_ENTROPY), min_interval_s=intervals.get(p.name, 0.0))
+                      for p in live]
         self.harvester = harvester
+        self._pool_quota = pool_seeds_per_user_per_day
+        self._pool_used: dict[tuple[str, str], int] = {}
 
     @classmethod
     def from_settings(cls, s: Settings, client: httpx.AsyncClient) -> "EntropyService":
@@ -111,56 +130,89 @@ class EntropyService:
             s.ibm_shots, s.ibm_harvest_interval_s, s.ibm_pool_min_bytes, s.ibm_max_jobs_per_day,
             simulator=s.ibm_mode == "simulator", sim_qubits=s.ibm_sim_qubits,
         )
-        return cls(live, harvester)
+        return cls(live, harvester, {"anu": s.anu_min_interval_s, "lfd": s.lfd_min_interval_s},
+                   s.pool_seeds_per_user_per_day)
+
+    async def _refill(self, st: _ProviderState, failures: dict[str, str]) -> None:
+        """Fetch a batch upstream, at most once per min_interval_s per provider, and health-test it."""
+        async with st.lock:
+            if len(st.buffer) >= SEED_BYTES or time.monotonic() - st.last_fetch < st.min_interval_s:
+                return
+            st.last_fetch = time.monotonic()
+            try:
+                data = await st.provider.fetch(FETCH_BYTES)
+            except EntropyError as e:
+                failures[st.provider.name] = str(e)
+                if not e.transient:
+                    st.record_failure(str(e), e.cooldown_s)
+                return
+            if reason := st.monitor.check(data):
+                st.record_failure(f"health test failed: {reason}")
+                failures[st.provider.name] = f"health test failed: {reason}"
+                return
+            st.record_success()
+            st.buffer.extend(data)
 
     async def _from_live(self, failures: dict[str, str]) -> tuple[str, bytes] | None:
         for st in self._live:
             if not st.usable:
                 continue
-            try:
-                data = await st.provider.fetch(SEED_BYTES)
-            except EntropyError as e:
-                st.record_failure(str(e))
-                failures[st.provider.name] = str(e)
-                continue
-            reason = st.monitor.check(data)
-            if reason:
-                st.record_failure(f"health test failed: {reason}")
-                failures[st.provider.name] = f"health test failed: {reason}"
-                continue
-            st.record_success()
-            return st.provider.name, data
+            if len(st.buffer) < SEED_BYTES:
+                await self._refill(st, failures)
+            if data := st.take(SEED_BYTES):
+                return st.provider.name, data
         return None
 
-    async def _from_pool(self) -> bytes | None:
-        if self.harvester is None:
+    def _pool_allowed(self, user_id: str | None) -> bool:
+        """The IBM pool is scarce (one QPU job ≈ 127 seeds): signed-in users only, with a daily quota each."""
+        if user_id is None or self.harvester is None:
+            return False
+        key = (time.strftime("%Y-%m-%d", time.gmtime()), user_id)
+        if self._pool_used.get(key, 0) >= self._pool_quota:
+            return False
+        if len(self._pool_used) > 100_000:
+            self._pool_used.clear()
+        self._pool_used[key] = self._pool_used.get(key, 0) + 1
+        return True
+
+    async def _from_pool(self, user_id: str | None) -> tuple[bytes, list[dict]] | None:
+        if not self._pool_allowed(user_id):
             return None
         return await self.harvester.pool.take(SEED_BYTES)
 
-    async def get_stream(self) -> EntropyResult:
+    async def get_stream(self, user_id: str | None = None, use_pool: bool = True) -> EntropyResult:
         failures: dict[str, str] = {}
-        pooled, live = await asyncio.gather(self._from_pool(), self._from_live(failures))
+        pooled, live = await asyncio.gather(self._from_pool(user_id if use_pool else None),
+                                            self._from_live(failures))
         sources: list[str] = []
         extra = b""  # everything mixed in on top of os.urandom
         quantum_bytes = 0
+        ibm_jobs = None
         if pooled and self.harvester:
+            data, ibm_jobs = pooled
             sources.append(self.harvester.name)
-            extra += pooled
-            quantum_bytes += len(pooled) if self.harvester.is_quantum else 0
+            extra += data
+            # Count only bytes from real hardware chunks, judged per chunk rather than by the current mode.
+            if all(m.get("mode") == "hardware" for m in ibm_jobs):
+                quantum_bytes += len(data)
         if live:
             sources.append(live[0])
             extra += live[1]
             quantum_bytes += len(live[1])
-        ibm_job = None
-        if pooled and self.harvester and self.harvester.last_job_id:
-            # Most recent harvest feeding the pool (the pool can hold bytes from earlier jobs too).
-            ibm_job = {"backend": self.harvester.last_backend, "job_id": self.harvester.last_job_id,
-                       "mode": "simulator" if self.harvester.simulator else "hardware"}
         prov = Provenance(sources=sources or ["os_csprng"], quantum=quantum_bytes > 0, quantum_bytes=quantum_bytes,
-                          failures=failures, ibm_job=ibm_job)
+                          failures=failures, ibm_jobs=ibm_jobs)
         return EntropyResult(KeyStream(derive_key(extra)), prov)
 
-    def status(self) -> dict:
+    def status(self, detail: bool = False) -> dict:
+        """Public view hides raw errors and job ids (they can leak account details); admins get everything."""
+        full = self._status()
+        if detail:
+            return full
+        keep = ("name", "quantum", "configured", "available", "state", "mode", "pool_bytes")
+        return {**full, "providers": [{k: p[k] for k in keep if k in p} | {"error": bool(p.get("last_error"))}
+                                      for p in full["providers"]]}
+
+    def _status(self) -> dict:
         providers = [
             {
                 "name": st.provider.name,

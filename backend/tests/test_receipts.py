@@ -71,30 +71,106 @@ def test_tampered_receipt_fails_verification(client):
     assert client.post("/api/v2/receipts/verify", json={"receipt": receipt}).json()["valid"] is False
 
 
-def test_provably_fair_draw(client):
+def commit_and_run(client, entries, winners=3, title="Launch giveaway"):
+    c = client.post("/api/v2/draws", json={"title": title, "entries": entries, "winners": winners})
+    assert c.status_code == 200, c.text
+    r = client.post(f"/api/v2/draws/{c.json()['draw_id']}/run")
+    assert r.status_code == 200, r.text
+    return c.json(), r.json()
+
+
+def test_commit_then_run_draw(client):
     entries = [f"@user{i}" for i in range(50)]
-    r = client.post("/api/v2/draw", json={"title": "Launch giveaway", "entries": entries, "winners": 3}).json()
-    winners = r["winners"]
-    assert len({w["index"] for w in winners}) == 3 and all(entries[w["index"]] == w["entry"] for w in winners)
-    rid = r["receipt"]["payload"]["receipt_id"]
-    v = client.post("/api/v2/receipts/verify", json={"receipt_id": rid, "entries": entries}).json()
-    assert v["valid"] and v["entries_match"]
-    altered = client.post("/api/v2/receipts/verify", json={"receipt_id": rid, "entries": entries[:-1]}).json()
+    commit, run = commit_and_run(client, entries)
+    assert commit["commit_receipt"]["payload"]["kind"] == "draw_commit"
+    assert commit["commit_receipt"]["payload"]["provenance"]["sources"] == []  # no randomness at commit time
+    winners = run["winners"]
+    canonical_order = sorted(entries)  # indexes refer to the canonical (sorted) list anyone can rebuild
+    assert len({w["index"] for w in winners}) == 3
+    assert all(canonical_order[w["index"]] == w["entry"] for w in winners)
+    payload = run["receipt"]["payload"]
+    assert payload["details"]["commit_receipt_id"] == commit["commit_receipt"]["payload"]["receipt_id"]
+
+    v = client.post("/api/v2/receipts/verify", json={"receipt_id": payload["receipt_id"], "entries": entries}).json()
+    assert v["valid"] and v["entries_match"] and v["draw"]["status"] == "done"
+    assert v["draw"]["draws_by_same_owner_over_same_entries"] == 1
+    altered = client.post("/api/v2/receipts/verify", json={"receipt_id": payload["receipt_id"],
+                                                           "entries": entries[:-1]}).json()
     assert altered["entries_match"] is False
 
 
-@pytest.mark.parametrize("body", [
-    {"title": "x", "entries": ["a"], "winners": 2},
-    {"title": "x", "entries": [], "winners": 1},
-    {"title": "", "entries": ["a"], "winners": 1},
+def test_draw_runs_exactly_once(client):
+    c = client.post("/api/v2/draws", json={"title": "t", "entries": ["a", "b", "c"], "winners": 1}).json()
+    assert client.post(f"/api/v2/draws/{c['draw_id']}/run").status_code == 200
+    assert client.post(f"/api/v2/draws/{c['draw_id']}/run").status_code == 409  # no second roll
+
+
+def test_rerolls_are_publicly_visible(client):
+    entries = ["alice", "bob", "carol"]
+    for _ in range(3):
+        _, run = commit_and_run(client, entries, winners=1)
+    v = client.post("/api/v2/receipts/verify", json={"receipt_id": run["receipt"]["payload"]["receipt_id"]}).json()
+    assert v["draw"]["draws_by_same_owner_over_same_entries"] == 3
+
+
+def test_entries_are_normalized_and_duplicates_rejected(client):
+    dup = client.post("/api/v2/draws", json={"title": "t", "entries": ["Alice", "alice "], "winners": 1})
+    assert dup.status_code == 422 and "Duplicate" in dup.text
+    ctrl = client.post("/api/v2/draws", json={"title": "t", "entries": ["a\u0000b", "c"], "winners": 1})
+    assert ctrl.status_code == 422
+    # NFD input is stored as NFC, so a verifier pasting either form gets a match
+    commit, run = commit_and_run(client, ["Jose\u0301", "zoe"], winners=1)
+    v = client.post("/api/v2/receipts/verify", json={"receipt_id": run["receipt"]["payload"]["receipt_id"],
+                                                     "entries": ["Jos\u00e9", " zoe "]}).json()
+    assert v["entries_match"] is True
+
+
+def test_draws_require_sign_in_in_production(monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    get_settings.cache_clear()
+    with TestClient(create_app(settings=get_settings(), entropy=EntropyService([FakeProvider("lfd")]))) as c:
+        assert c.post("/api/v2/draws", json={"title": "t", "entries": ["a"], "winners": 1}).status_code == 401
+        assert c.post("/api/v2/draws/x/run").status_code == 401
+
+
+@pytest.mark.parametrize("receipt", [
+    {"payload": {}, "signatures": {"ed25519": 5}},
+    {"payload": [], "signatures": {}},
+    {"payload": {"key_id": ["x"]}, "signatures": {"ed25519": "!!", "ml-dsa-65": "@@"}},
+    {"payload": {"commitment": 12345, "key_id": "nope"}, "signatures": {}},
 ])
-def test_draw_validation(client, body):
-    assert client.post("/api/v2/draw", json=body).status_code == 422
+def test_malformed_receipts_never_500(client, receipt):
+    r = client.post("/api/v2/receipts/verify", json={"receipt": receipt, "value": "x", "salt": "%%%"})
+    assert r.status_code in (200, 422)
+    if r.status_code == 200:
+        assert r.json()["valid"] is False and "commitment_matches" not in r.json()
+
+
+def test_key_rotation_and_revocation():
+    from app.receipts import Keyring, verify_receipt
+
+    old, new = Signer.generate(), Signer.generate()
+    receipt, _ = build_receipt(old, "random", PROV, secret_value="ab")
+    retired = Keyring(new, [old.public_keys()])
+    assert verify_receipt(receipt["payload"], receipt["signatures"], retired)["valid"]  # survives rotation
+    assert verify_receipt(receipt["payload"], receipt["signatures"], Keyring(new))["reason"] == "unknown_key"
+    revoked = Keyring(new, [{**old.public_keys(), "status": "revoked",
+                             "revoked_at": receipt["payload"]["issued_at"] - 1}])
+    assert verify_receipt(receipt["payload"], receipt["signatures"], revoked)["reason"] == "revoked_key"
+
+
+def test_key_file_with_loose_permissions_is_refused(tmp_path):
+    path = tmp_path / "keys.json"
+    Signer.load_or_create(str(path))
+    os.chmod(path, 0o644)
+    with pytest.raises(PermissionError):
+        Signer.load_or_create(str(path))
 
 
 def test_public_keys_endpoint(client):
     k = client.get("/.well-known/quantumpass-keys.json").json()
     assert k["algorithms"] == ["ed25519", "ml-dsa-65"] and len(k["keys"][0]["key_id"]) == 16
+    assert k["keys"][0]["status"] == "active"
     assert client.get("/api/v2/receipts/does-not-exist").status_code == 404
 
 
@@ -107,3 +183,62 @@ def test_draw_is_uniform():
     s = KeyStream(derive_key(b"\x05" * 64, b"\x06" * 64))
     counts = Counter(draw_winners(s, ["a"] * 10, 1)[0] for _ in range(20_000))
     assert min(counts.values()) > 1800 and max(counts.values()) < 2200
+
+
+def test_draw_title_cannot_carry_links_and_size_is_capped(client):
+    phish = client.post("/api/v2/draws", json={"title": "You won! claim at evil.com", "entries": ["a"], "winners": 1})
+    assert phish.status_code == 422
+    big = client.post("/api/v2/draws", json={"title": "t", "entries": [f"{i}" + "x" * 190 for i in range(2000)],
+                                             "winners": 1})
+    assert big.status_code == 422
+    assert client.post("/api/v2/draws", json={"title": "t", "entries": [str(i) for i in range(200)],
+                                              "winners": 101}).status_code == 422
+
+
+def test_shuffled_rerolls_are_still_counted(client):
+    import random as _r
+    entries = [f"p{i}" for i in range(20)]
+    for _ in range(3):
+        shuffled = entries[:]
+        _r.shuffle(shuffled)
+        _, run = commit_and_run(client, shuffled, winners=1)
+    v = client.post("/api/v2/receipts/verify", json={"receipt_id": run["receipt"]["payload"]["receipt_id"]}).json()
+    assert v["draw"]["draws_by_same_owner_over_same_entries"] == 3
+    assert v["draw"]["draws_by_anyone_over_same_entries"] == 3
+    assert v["draw"]["committed_seconds_before_run"] >= 0
+
+
+def test_anonymous_receipts_expire():
+    from datetime import timedelta
+
+    from sqlmodel import Session
+
+    from app import db
+    db.init_db()
+    s = Signer.generate()
+    old, _ = build_receipt(s, "random", PROV, secret_value="x")
+    mine, _ = build_receipt(s, "random", PROV, secret_value="y")
+    db.save_receipt(old, None)
+    db.save_receipt(mine, "user_1")
+    with Session(db.engine()) as ses:
+        for rid in (old["payload"]["receipt_id"], mine["payload"]["receipt_id"]):
+            r = ses.get(db.Receipt, rid)
+            r.created_at = db._now() - timedelta(days=40)
+            ses.add(r)
+        ses.commit()
+    assert db.purge_anonymous_receipts() == 1
+    assert db.get_receipt(mine["payload"]["receipt_id"]) is not None
+
+
+def test_signatures_are_domain_separated():
+    """A receipt signature must not verify as a plain signature over the bare payload (anti-stripping)."""
+    from cryptography.exceptions import InvalidSignature
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+    from app.receipts import unb64
+
+    s = Signer.generate()
+    receipt, _ = build_receipt(s, "random", PROV, secret_value="ab")
+    pub = Ed25519PublicKey.from_public_bytes(unb64(s.public_keys()["ed25519"]))
+    with pytest.raises(InvalidSignature):
+        pub.verify(unb64(receipt["signatures"]["ed25519"]), canonical(receipt["payload"]))

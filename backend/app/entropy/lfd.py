@@ -2,7 +2,7 @@
 
 import httpx
 
-from .base import EntropyError
+from .base import EntropyError, http_error
 
 MAX_PER_REQUEST = 1024
 
@@ -28,8 +28,10 @@ class LfDProvider:
             r.raise_for_status()
             hex_str = r.json()["qrn"]
             data = bytes.fromhex(hex_str)
-        except (httpx.HTTPError, ValueError, KeyError, TypeError) as e:
-            raise EntropyError(f"LfD request failed: {e.__class__.__name__}") from e
+        except httpx.HTTPError as e:
+            raise http_error("LfD", e) from e
+        except (ValueError, KeyError, TypeError) as e:
+            raise EntropyError("LfD returned a malformed payload") from e
         if len(data) != n:
             raise EntropyError("LfD returned wrong length")
         return data

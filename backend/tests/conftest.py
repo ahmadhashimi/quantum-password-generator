@@ -3,6 +3,7 @@ import os
 import pytest
 
 os.environ.setdefault("ENVIRONMENT", "development")
+os.environ.setdefault("ALLOWED_HOSTS", '["testserver", "localhost"]')
 
 
 @pytest.fixture(autouse=True)
@@ -16,6 +17,8 @@ def _isolated_settings(tmp_path, monkeypatch):
         monkeypatch.delenv(var, raising=False)
     get_settings.cache_clear()
     db.reset_engine()
+    from app import auth
+    auth._last_upsert.clear()
     from app.ratelimit import limiter
     limiter.reset()
     yield

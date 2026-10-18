@@ -10,9 +10,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    environment: str = "development"
+    # Safe by default: development mode (auto-signed-in local admin when Clerk is off) must be opted into.
+    environment: Literal["development", "production", "test"] = "production"
     allowed_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173", "http://localhost:8000"])
-    allowed_hosts: list[str] = Field(default_factory=lambda: ["*"])
+    # Host header allowlist; also blocks DNS-rebinding attacks against a local dev server. Set your domain in prod.
+    allowed_hosts: list[str] = Field(default_factory=lambda: ["localhost", "127.0.0.1"])
+    admin_require_mfa: bool = True  # admin API needs a second factor verified within the last hour
     frontend_dist: str = "../frontend/dist"
 
     # Quantum entropy providers
@@ -20,6 +23,9 @@ class Settings(BaseSettings):
     anu_api_url: str = "https://api.quantumnumbers.anu.edu.au"
     lfd_api_url: str = "https://lfdr.de/qrng_api/qrng"
     provider_timeout_s: float = 4.0
+    anu_min_interval_s: float = 300.0  # ANU bills/limits per call: ≤ 288 calls/day, each buffering 16 seeds
+    lfd_min_interval_s: float = 10.0  # be a good citizen to a free public service
+    pool_seeds_per_user_per_day: int = 20
     # "hardware" = real IBM QPU (needs token + CRN); "simulator" = local Qiskit Aer run of the same circuit,
     # for testing the pipeline end to end. Simulator output is classical and is never labelled quantum.
     ibm_mode: Literal["hardware", "simulator"] = "hardware"
@@ -40,7 +46,7 @@ class Settings(BaseSettings):
     assistant_model: str = "claude-opus-5-5"
     # Cost guardrails
     assistant_daily_messages_per_user: int = 50
-    assistant_user_daily_budget_usd: float = 0.50  # per-user dollar cap (message caps alone don't bound cost)
+    assistant_user_daily_budget_usd: float = 1.00  # per-user dollar cap (message caps alone don't bound cost)
     assistant_daily_budget_usd: float = 10.0  # global kill switch: assistant pauses when today's spend hits this
     assistant_monthly_budget_usd: float = 150.0
     assistant_max_tokens: int = 1500
@@ -56,6 +62,7 @@ class Settings(BaseSettings):
     # Receipt signing keys: SIGNING_KEYS (JSON of base64 seeds) or a 0600 key file created on first start.
     signing_keys: str | None = None
     signing_key_path: str | None = "./signing_keys.json"
+    retired_signing_keys: str | None = None  # JSON list of retired/revoked public key sets
 
     database_url: str = "sqlite:///./qpg.db"
 

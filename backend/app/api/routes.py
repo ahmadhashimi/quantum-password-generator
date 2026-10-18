@@ -27,8 +27,12 @@ async def _with_receipt(request: Request, body: dict, user: CurrentUser | None, 
     return body | {"receipt": receipt, "receipt_salt": salt}
 
 
+def _uid(user: CurrentUser | None) -> str | None:
+    return user.id if user else None
+
+
 async def _password(entropy: EntropyService, user: CurrentUser | None, o: PasswordOptions) -> tuple[dict, dict]:
-    res = await entropy.get_stream()
+    res = await entropy.get_stream(_uid(user))
     try:
         pw, bits = generate_password(res.stream, o)
     except ValueError as e:
@@ -64,7 +68,7 @@ async def passphrase(
     separator: Literal["-", "_", ".", " ", ""] = "-",
     capitalize: bool = False, add_number: bool = False, receipt: bool = False,
 ):
-    res = await entropy.get_stream()
+    res = await entropy.get_stream(_uid(user))
     phrase, bits = generate_passphrase(res.stream, words, separator, capitalize, add_number)
     p = res.provenance
     await run_in_threadpool(db.record_usage, user.id if user else None, "passphrase", length=words,
@@ -80,7 +84,7 @@ async def passphrase(
 @limiter.limit(general_limit)
 async def random_bytes(request: Request, entropy: Entropy, user: MaybeUser,
                        bytes: Annotated[int, Query(ge=1, le=1024)] = 32, receipt: bool = False):  # noqa: A002
-    res = await entropy.get_stream()
+    res = await entropy.get_stream(_uid(user))
     data = res.stream.read(bytes)
     await run_in_threadpool(db.record_usage, user.id if user else None, "random", length=bytes,
                             sources=res.provenance.sources, quantum=res.provenance.quantum)
@@ -92,7 +96,8 @@ async def random_bytes(request: Request, entropy: Entropy, user: MaybeUser,
 
 
 @router.get("/api/v2/entropy/status")
-async def entropy_status(entropy: Entropy):
+@limiter.limit(general_limit)
+async def entropy_status(request: Request, entropy: Entropy):
     return entropy.status()
 
 
@@ -108,14 +113,16 @@ async def public_config(s: Annotated[Settings, Depends(get_settings)]):
 
 
 @router.get("/api/v2/me")
-async def me(user: Annotated[CurrentUser, Depends(require_user)]):
+@limiter.limit(general_limit)
+async def me(request: Request, user: Annotated[CurrentUser, Depends(require_user)]):
     stats = await run_in_threadpool(db.user_stats, user.id)
     return {"id": user.id, "email": user.email, "name": user.name, "is_admin": user.is_admin, "stats": stats}
 
 
 @router.get("/api/v2/admin/stats")
-async def admin(user: Annotated[CurrentUser, Depends(require_admin)]):
-    return await run_in_threadpool(db.admin_stats)
+@limiter.limit(general_limit)
+async def admin(request: Request, entropy: Entropy, user: Annotated[CurrentUser, Depends(require_admin)]):
+    return await run_in_threadpool(db.admin_stats) | {"entropy": entropy.status(detail=True)}
 
 
 # --- v1 compatibility ---------------------------------------------------------------------------
@@ -132,7 +139,7 @@ async def v1_password(request: Request, entropy: Entropy, user: MaybeUser,
 @router.get("/quantum-random", include_in_schema=False)
 @limiter.limit(general_limit)
 async def v1_random(request: Request, entropy: Entropy, n: Annotated[int, Query(ge=1, le=64)] = 8):
-    res = await entropy.get_stream()
+    res = await entropy.get_stream(use_pool=False)
     value = int.from_bytes(res.stream.read((n + 7) // 8), "big") >> ((8 - n % 8) % 8)
     return {"quantum_bits": format(value, f"0{n}b"), "decimal_value": value, "hex_value": hex(value),
             "bits_requested": n, "provenance": res.provenance.as_dict()}

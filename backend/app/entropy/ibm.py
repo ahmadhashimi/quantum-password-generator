@@ -64,6 +64,7 @@ class IBMHarvester:
         if self._task:
             self._task.cancel()
             self._task = None
+        self.pool.flush()
 
     async def _loop(self) -> None:
         while True:
@@ -95,7 +96,8 @@ class IBMHarvester:
             self.last_error = f"health test failed: {failure}"
             return 0
         cooked = condition(raw)
-        await self.pool.add(cooked)
+        await self.pool.add(cooked, {"backend": backend, "job_id": job_id,
+                                     "mode": "simulator" if self.simulator else "hardware"})
         self.last_backend, self.last_job_id = backend, job_id
         self.last_harvest_at, self.last_error = time.time(), None
         log.info("IBM harvest: %d raw -> %d conditioned bytes from %s", len(raw), len(cooked), backend)

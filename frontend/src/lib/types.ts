@@ -11,16 +11,16 @@ export interface ReceiptPayload {
   version: string;
   receipt_id: string;
   issued_at: number;
-  kind: "password" | "passphrase" | "random" | "draw";
+  kind: "password" | "passphrase" | "random" | "draw" | "draw_commit";
   key_id: string;
   provenance: Pick<Provenance, "sources" | "quantum" | "quantum_bytes" | "mixed_with"> & {
-    ibm_job?: { backend: string; job_id: string; mode: string };
+    ibm_jobs?: { backend: string; job_id: string; mode: string }[];
     health?: Record<string, string>;
   };
   entropy_bits: number | null;
   commitment: string | null;
-  result: DrawResult | null;
-  details: Record<string, unknown>;
+  result: { winners: DrawWinner[] } | null;
+  details: DrawDetails & Record<string, unknown>;
 }
 
 export interface Receipt {
@@ -29,16 +29,33 @@ export interface Receipt {
   algorithms?: string[];
 }
 
-export interface DrawResult {
-  title: string;
-  entries_count: number;
-  entries_sha256: string;
-  winners: { index: number; entry: string }[];
+export interface DrawWinner {
+  index: number;
+  entry: string;
+}
+
+export interface DrawDetails {
+  draw_id?: string;
+  title?: string;
+  entries_count?: number;
+  entries_sha256?: string;
+  winners?: number;
+  commit_receipt_id?: string;
 }
 
 export interface VerifyResult {
   valid: boolean;
+  reason: "unknown_key" | "revoked_key" | "bad_signature" | null;
   signatures: Record<string, boolean>;
+  draw?: {
+    draw_id: string;
+    status: string;
+    commit_receipt_id: string;
+    result_receipt_id: string | null;
+    draws_by_same_owner_over_same_entries: number;
+    draws_by_anyone_over_same_entries: number;
+    committed_seconds_before_run: number | null;
+  };
   key_id_matches: boolean;
   in_public_log: boolean;
   payload: ReceiptPayload;

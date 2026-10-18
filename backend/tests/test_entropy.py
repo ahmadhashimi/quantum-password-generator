@@ -130,12 +130,28 @@ async def test_status_only_reports_quantum_after_real_success():
 
 async def test_pool_bytes_are_used_once_and_combined():
     pool = EntropyPool()
-    await pool.add(bytes(range(256)) * 1)
+    job_a = {"backend": "ibm_a", "job_id": "A", "mode": "hardware"}
+    job_b = {"backend": "ibm_b", "job_id": "B", "mode": "hardware"}
+    await pool.add(bytes(range(40)), job_a)
+    await pool.add(bytes(range(216)), job_b)
     h = IBMHarvester(pool, "tok", None, None, 1, 1, 1)
     svc = EntropyService([FakeProvider("lfd")], h)
-    r1 = await svc.get_stream()
+    r1 = await svc.get_stream("u1")
     assert r1.provenance.sources == ["ibm_quantum", "lfd"] and r1.provenance.quantum_bytes == 128
+    assert r1.provenance.ibm_jobs == [job_a, job_b]  # exactly the jobs whose bytes were consumed
     assert len(pool) == 256 - SEED_BYTES
+    r2 = await svc.get_stream("u1")
+    assert r2.provenance.ibm_jobs == [job_b]
+    anon = await svc.get_stream()  # anonymous callers never touch the scarce IBM pool
+    assert "ibm_quantum" not in anon.provenance.sources
+
+
+async def test_simulator_chunks_never_count_as_quantum():
+    pool = EntropyPool()
+    await pool.add(bytes(range(128)), {"backend": "aer", "job_id": "S", "mode": "simulator"})
+    h = IBMHarvester(pool, "tok", None, None, 1, 1, 1)  # harvester now in hardware mode
+    res = await EntropyService([], h).get_stream("u1")
+    assert res.provenance.quantum is False and res.provenance.quantum_bytes == 0
 
 
 def test_mixer_never_depends_on_quantum_alone():
@@ -146,10 +162,20 @@ def test_mixer_never_depends_on_quantum_alone():
 async def test_pool_persistence(tmp_path):
     path = tmp_path / "pool.bin"
     p = EntropyPool(str(path))
-    await p.add(b"x" * 100)
+    meta = {"backend": "ibm_x", "job_id": "J", "mode": "hardware"}
+    await p.add(b"x" * 100, meta)
     assert (path.stat().st_mode & 0o777) == 0o600
-    assert len(EntropyPool(str(path))) == 100
-    assert await p.take(101) is None and len(await p.take(40)) == 40
+    reloaded = EntropyPool(str(path))
+    assert len(reloaded) == 100
+    assert await p.take(101) is None
+    data, metas = await reloaded.take(40)
+    assert len(data) == 40 and metas == [meta]
+
+
+async def test_legacy_pool_file_without_metadata_is_discarded(tmp_path):
+    path = tmp_path / "pool.bin"
+    path.write_bytes(b"raw bytes from an old version")
+    assert len(EntropyPool(str(path))) == 0
 
 
 # --- IBM harvester (fake QPU results) ------------------------------------------------------------
@@ -204,7 +230,62 @@ async def test_simulator_mode_end_to_end_is_never_labelled_quantum():
     n = await h.harvest_once()
     assert n > 0 and len(pool) == n and h.last_backend == "aer_simulator_stabilizer"
 
-    res = await EntropyService([], h).get_stream()
+    res = await EntropyService([], h).get_stream("u1")
     assert res.provenance.sources == ["ibm_simulator"]
     assert res.provenance.quantum is False and res.provenance.quantum_bytes == 0
+    assert res.provenance.ibm_jobs[0]["mode"] == "simulator"
     assert EntropyService([], h).status()["providers"][0]["mode"] == "simulator"
+
+
+async def test_upstream_calls_are_throttled_and_batched():
+    lfd = FakeProvider("lfd")
+    svc = EntropyService([lfd], min_intervals={"lfd": 3600})
+    results = [await svc.get_stream() for _ in range(20)]
+    assert lfd.calls == 1  # one 1024-byte fetch serves 16 requests, then the interval blocks refetching
+    assert sum(r.provenance.quantum for r in results) == 16
+
+
+async def test_pool_quota_per_user():
+    pool = EntropyPool()
+    await pool.add(bytes(range(256)) * 10, {"backend": "b", "job_id": "J", "mode": "hardware"})
+    svc = EntropyService([], IBMHarvester(pool, "tok", None, None, 1, 1, 1), pool_seeds_per_user_per_day=2)
+    used = [("ibm_quantum" in (await svc.get_stream("u1")).provenance.sources) for _ in range(4)]
+    assert used == [True, True, False, False]
+
+
+def test_public_status_hides_errors():
+    svc = EntropyService([FakeProvider("anu", error="crn:v1:secret-account boom")])
+    import asyncio
+    asyncio.run(svc.get_stream())
+    public = svc.status()["providers"][0]
+    assert public["error"] is True and "last_error" not in public
+    assert "crn" in svc.status(detail=True)["providers"][0]["last_error"]
+
+
+@respx.mock
+async def test_quota_refusal_backs_off_for_an_hour(client):
+    respx.get(LFD).respond(429, headers={"retry-after": "7200"})
+    lfd = LfDProvider(client, LFD, 1)
+    svc = EntropyService([lfd])
+    await svc.get_stream()
+    st = svc.status(detail=True)["providers"][0]
+    assert st["state"] == "cooldown" and "429" in st["last_error"]
+
+
+@respx.mock
+async def test_local_pool_timeout_does_not_trip_breaker(client):
+    respx.get(LFD).mock(side_effect=httpx.PoolTimeout("busy"))
+    svc = EntropyService([LfDProvider(client, LFD, 1)])
+    for _ in range(5):
+        await svc.get_stream()
+    assert svc.status(detail=True)["providers"][0]["state"] != "cooldown"
+
+
+def test_ipv6_clients_share_a_64_bucket():
+    from types import SimpleNamespace
+
+    from app.ratelimit import rate_key
+    req = lambda ip: SimpleNamespace(state=SimpleNamespace(), client=SimpleNamespace(host=ip),  # noqa: E731
+                                     headers={}, scope={"type": "http"})
+    assert rate_key(req("2001:db8:1:2::1")) == rate_key(req("2001:db8:1:2:ffff::9")) == "ip:2001:db8:1:2::/64"
+    assert rate_key(req("203.0.113.7")) == "ip:203.0.113.7"
