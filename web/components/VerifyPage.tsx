@@ -2,6 +2,7 @@
 import { CheckCircle2, FileSearch, XCircle } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 import { apiPost } from "../lib/api";
+import { verifyReceiptInBrowser, type BrowserProof, type VerifyMaterial } from "../lib/verify-local";
 import { sourceLabel } from "../lib/format";
 import type { VerifyResult } from "../lib/types";
 
@@ -20,16 +21,36 @@ export function VerifyPage({ receiptId }: { receiptId: string }) {
   const [id, setId] = useState(receiptId);
   const [entries, setEntries] = useState("");
   const [result, setResult] = useState<VerifyResult | null>(null);
+  const [browserProof, setBrowserProof] = useState<BrowserProof | null>(null);
+  const [localError, setLocalError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const verify = async (rid: string, entryText = "") => {
     setError(null);
+    setBrowserProof(null);
+    setLocalError(null);
     try {
       const list = entryText.split("\n").map((e) => e.trim()).filter(Boolean);
-      setResult(await apiPost<VerifyResult>("/api/v2/receipts/verify", {
+      const serverResult = await apiPost<VerifyResult>("/api/v2/receipts/verify", {
         receipt_id: rid.trim(),
         ...(list.length ? { entries: list } : {}),
-      }));
+      });
+      setResult(serverResult);
+      try {
+        const response = await fetch(
+          `/api/v2/receipts/${encodeURIComponent(rid.trim())}/verify-material`,
+          { cache: "no-store" },
+        );
+        if (!response.ok) throw new Error("Verification material unavailable");
+        const material = (await response.json()) as VerifyMaterial;
+        if (material.receipt.payload.receipt_id !== serverResult.payload.receipt_id
+            || !material.receipt.signatures) {
+          throw new Error("Verification response does not match the receipt being displayed");
+        }
+        setBrowserProof(await verifyReceiptInBrowser(material));
+      } catch (e) {
+        setLocalError((e as Error).message);
+      }
     } catch (e) {
       setResult(null);
       setError((e as Error).message);
@@ -80,6 +101,20 @@ export function VerifyPage({ receiptId }: { receiptId: string }) {
             {result.valid ? <CheckCircle2 className="size-6" aria-hidden /> : <XCircle className="size-6" aria-hidden />}
             {result.valid ? "Signed receipt verified" : "Verification failed"}
           </h2>
+          <div className="rounded-xl border border-violet-300/30 p-4 text-sm">
+            <h3 className="font-semibold">Independent browser computation</h3>
+            {browserProof ? (
+              <div className="space-y-1">
+                <p>{browserProof.valid ? "Both signatures verified locally in your browser"
+                    : "Local verification failed or the signing key was revoked"}</p>
+                <p>Ed25519: {browserProof.ed25519 ? "pass" : "fail"}
+                  {" · "}ML-DSA-65: {browserProof.mlDsa65 ? "pass" : "fail"}</p>
+                <p>Payload and key fingerprint: {browserProof.payloadMatches && browserProof.keyFingerprintMatches
+                  ? "matched" : "mismatch"}</p>
+                <p className="text-xs text-slate-500">{browserProof.warning}</p>
+              </div>
+            ) : <p className="text-slate-500">{localError ?? "Checking signatures locally…"}</p>}
+          </div>
           <ul className="space-y-1.5 text-sm">
             <Check ok={result.signatures["ed25519"]} label="Ed25519 signature (classical)" />
             <Check ok={result.signatures["ml-dsa-65"]} label="ML-DSA-65 signature (post-quantum, NIST FIPS 204)" />
