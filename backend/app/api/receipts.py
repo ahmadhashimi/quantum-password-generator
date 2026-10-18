@@ -15,8 +15,9 @@ import secrets
 import unicodedata
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
+from sqlalchemy.exc import IntegrityError
 from starlette.concurrency import run_in_threadpool
 
 from .. import db
@@ -183,11 +184,36 @@ def _owner(user: CurrentUser | None, s: Settings) -> str | None:
     return user.id if user else None
 
 
+def _idempotency_info(owner: str | None, endpoint: str, token: str | None,
+                      request_json: dict) -> tuple[str, str] | None:
+    if token is None:
+        return None
+    if not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", token):
+        raise HTTPException(422, "Invalid Idempotency-Key: expected 8-128 URL-safe characters")
+    record_id = hashlib.sha256(json.dumps([owner, endpoint, token], separators=(",", ":")).encode()).hexdigest()
+    request_hash = hashlib.sha256(json.dumps(request_json, sort_keys=True,
+                                             separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
+    return record_id, request_hash
+
+
+async def _replay(info: tuple[str, str] | None) -> dict | None:
+    if info is None:
+        return None
+    try:
+        return await run_in_threadpool(db.get_idempotent_response, *info)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
 @router.post("/api/v2/draws")
 @limiter.limit(general_limit)
 async def commit_draw(request: Request, body: DrawCommit, user: MaybeUser,
-                      s: Annotated[Settings, Depends(get_settings)]):
+                      s: Annotated[Settings, Depends(get_settings)],
+                      idempotency_key: Annotated[str | None, Header()] = None):
     owner = _owner(user, s)
+    idem = _idempotency_info(owner, "POST /api/v2/draws", idempotency_key, body.model_dump())
+    if replay := await _replay(idem):
+        return replay
     if body.winners > len(body.entries):
         raise HTTPException(422, "More winners than entries")
     if await run_in_threadpool(db.draws_today, owner) >= DRAWS_PER_USER_PER_DAY:
@@ -197,12 +223,20 @@ async def commit_draw(request: Request, body: DrawCommit, user: MaybeUser,
                "entries_sha256": entries_hash(body.entries), "winners": body.winners}
     no_randomness = {"sources": [], "quantum": False, "quantum_bytes": 0, "mixed_with": "none"}
     receipt, _ = build_receipt(get_signer(request), "draw_commit", no_randomness, details=details)
-    await run_in_threadpool(db.commit_draw_tx, db.Draw(
-        id=draw_id, owner_id=owner, title=body.title, entries_json=json.dumps(body.entries, ensure_ascii=False),
-        entries_sha256=details["entries_sha256"], entries_count=len(body.entries), winners=body.winners,
-        commit_receipt_id=receipt["payload"]["receipt_id"]), receipt, owner)
-    return {"draw_id": draw_id, "commit_receipt": receipt,
-            "commit_url": f"/#/verify/{receipt['payload']['receipt_id']}"}
+    response = {"draw_id": draw_id, "commit_receipt": receipt,
+                "commit_url": f"/#/verify/{receipt['payload']['receipt_id']}"}
+    try:
+        await run_in_threadpool(db.commit_draw_tx, db.Draw(
+            id=draw_id, owner_id=owner, title=body.title, entries_json=json.dumps(body.entries, ensure_ascii=False),
+            entries_sha256=details["entries_sha256"], entries_count=len(body.entries), winners=body.winners,
+            commit_receipt_id=receipt["payload"]["receipt_id"]), receipt, owner,
+            (*idem, response) if idem else None)
+    except IntegrityError:
+        replay = await _replay(idem)
+        if replay is not None:
+            return replay
+        raise
+    return response
 
 
 def _calculate_result(draw: db.Draw, signer) -> tuple[dict, list[dict]]:
@@ -262,8 +296,12 @@ async def complete_interrupted_draw(request: Request, draw_id: str,
 
 @router.post("/api/v2/draws/{draw_id}/run")
 @limiter.limit(general_limit)
-async def run_draw(request: Request, draw_id: str, user: MaybeUser, s: Annotated[Settings, Depends(get_settings)]):
+async def run_draw(request: Request, draw_id: str, user: MaybeUser, s: Annotated[Settings, Depends(get_settings)],
+                   idempotency_key: Annotated[str | None, Header()] = None):
     owner = _owner(user, s)
+    idem = _idempotency_info(owner, f"POST /api/v2/draws/{draw_id}/run", idempotency_key, {})
+    if replay := await _replay(idem):
+        return replay
     # Do not expend entropy on invalid/previously executed requests.
     existing = await run_in_threadpool(db.get_draw, draw_id[:64])
     if not existing or existing.owner_id != owner or existing.status != "committed":
@@ -275,9 +313,11 @@ async def run_draw(request: Request, draw_id: str, user: MaybeUser, s: Annotated
         raise HTTPException(409, "Draw already started; seed discarded")
     # Crash after claim leaves status 'seeded'. Recovery uses persisted seed, never a new random draw.
     receipt, winners = _calculate_result(draw, get_signer(request))
-    await run_in_threadpool(db.finish_draw_tx, draw.id, owner, receipt)
+    response = {"winners": winners, "receipt": receipt,
+                "verify_url": f"/verify/{receipt['payload']['receipt_id']}"}
+    await run_in_threadpool(db.finish_draw_tx, draw.id, owner, receipt,
+                            (*idem, response) if idem else None)
     prov = json.loads(draw.seed_provenance)
     await run_in_threadpool(db.record_usage, owner, "draw", length=draw.entries_count,
                             sources=prov["sources"], quantum=prov["quantum"])
-    return {"winners": winners, "receipt": receipt,
-            "verify_url": f"/verify/{receipt['payload']['receipt_id']}"}
+    return response
