@@ -91,4 +91,6 @@ class EntropyPool:
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as f:
             json.dump(payload, f)
+            f.flush()
+            os.fsync(f.fileno())  # durable before the rename, so a crash can't leave a truncated pool file
         os.replace(tmp, self._path)

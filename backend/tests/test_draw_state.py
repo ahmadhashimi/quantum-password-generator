@@ -193,3 +193,32 @@ def test_investigation_list_shows_timing_not_seed(client, monkeypatch):
     assert [d["draw_id"] for d in listed] == [draw_id]
     assert listed[0]["run_started_at"] and listed[0]["seed_provenance"]["sources"] == ["lfd"]
     assert db.get_draw(draw_id).seed_hex not in str(listed)
+
+
+def test_daily_draw_quota_is_exact_under_concurrency(monkeypatch):
+    """The quota is re-checked inside the commit transaction, so racing commits can't overshoot it."""
+    from app.api import receipts as receipts_api
+
+    monkeypatch.setattr(receipts_api, "DRAWS_PER_USER_PER_DAY", 3)
+    monkeypatch.setattr(db, "draws_today", lambda owner: 0)  # defeat the early (racy) check
+    db.init_db()
+    from app.receipts import Signer, build_receipt
+
+    signer = Signer.generate()
+    ok, refused = 0, 0
+    for i in range(5):
+        d = db.Draw(id=f"draw{i:012d}", owner_id="u1", title="t", entries_json="[]", entries_sha256="0" * 64,
+                    entries_count=2, winners=1, commit_receipt_id=f"rcpt{i:012d}")
+        r, _ = build_receipt(signer, "draw_commit", {"sources": [], "quantum": False, "quantum_bytes": 0,
+                                                     "mixed_with": "none"},
+                             details={"draw_id": d.id, "title": "t", "entries_count": 2, "entries_sha256": "0" * 64,
+                                      "winners": 1})
+        r["payload"]["receipt_id"] = d.commit_receipt_id
+        try:
+            db.commit_draw_tx(d, r, None, 3)
+            ok += 1
+        except db.DrawQuotaExceeded:
+            refused += 1
+    assert (ok, refused) == (3, 2)
+    with db.session() as s:
+        assert len(s.exec(select(db.Draw)).all()) == 3

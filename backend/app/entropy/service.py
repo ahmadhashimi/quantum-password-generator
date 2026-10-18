@@ -175,22 +175,24 @@ class EntropyService:
                 return st.provider.name, data
         return None
 
-    def _pool_allowed(self, user_id: str | None) -> bool:
-        """The IBM pool is scarce (one QPU job ≈ 127 seeds): signed-in users only, with a daily quota each."""
+    async def _from_pool(self, user_id: str | None) -> tuple[bytes, list[dict[str, Any]]] | None:
+        """The IBM pool is scarce (one QPU job ≈ 127 seeds): signed-in users only, with a daily quota each.
+
+        The quota is charged before taking (so concurrent requests can't overshoot it) and refunded if the pool
+        turned out to be empty, so an empty pool never uses up anyone's allowance.
+        """
         if user_id is None or self.harvester is None:
-            return False
+            return None
         key = (time.strftime("%Y-%m-%d", time.gmtime()), user_id)
         if self._pool_used.get(key, 0) >= self._pool_quota:
-            return False
+            return None
         if len(self._pool_used) > 100_000:
             self._pool_used.clear()
         self._pool_used[key] = self._pool_used.get(key, 0) + 1
-        return True
-
-    async def _from_pool(self, user_id: str | None) -> tuple[bytes, list[dict[str, Any]]] | None:
-        if not self._pool_allowed(user_id) or self.harvester is None:
-            return None
-        return await self.harvester.pool.take(SEED_BYTES)
+        taken = await self.harvester.pool.take(SEED_BYTES)
+        if taken is None:
+            self._pool_used[key] -= 1
+        return taken
 
     async def get_stream(self, user_id: str | None = None, use_pool: bool = True) -> EntropyResult:
         failures: dict[str, str] = {}

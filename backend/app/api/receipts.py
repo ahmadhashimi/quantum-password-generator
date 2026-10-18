@@ -271,7 +271,9 @@ async def commit_draw(request: Request, body: DrawCommit, user: MaybeUser,
                    commit_receipt_id=rid)
     idem = db.idempotency_row(owner or "dev", "draws.commit", key, req_hash, response) if key else None
     try:
-        await run_in_threadpool(db.commit_draw_tx, draw, receipt, idem)
+        await run_in_threadpool(db.commit_draw_tx, draw, receipt, idem, DRAWS_PER_USER_PER_DAY)
+    except db.DrawQuotaExceeded:
+        raise HTTPException(429, f"Daily limit of {DRAWS_PER_USER_PER_DAY} draws reached") from None
     except IntegrityError:
         # A concurrent request with the same Idempotency-Key won; nothing of ours was written. Replay theirs.
         if (replayed := await run_in_threadpool(_replay, owner, "draws.commit", key, req_hash)) is not None:

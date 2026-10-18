@@ -289,3 +289,13 @@ def test_ipv6_clients_share_a_64_bucket():
                                      headers={}, scope={"type": "http"})
     assert rate_key(req("2001:db8:1:2::1")) == rate_key(req("2001:db8:1:2:ffff::9")) == "ip:2001:db8:1:2::/64"
     assert rate_key(req("203.0.113.7")) == "ip:203.0.113.7"
+
+
+async def test_empty_pool_does_not_use_up_quota():
+    pool = EntropyPool()
+    svc = EntropyService([], IBMHarvester(pool, "tok", None, None, 1, 1, 1), pool_seeds_per_user_per_day=2)
+    for _ in range(5):  # pool empty: nothing taken, nothing charged
+        assert "ibm_quantum" not in (await svc.get_stream("u1")).provenance.sources
+    await pool.add(bytes(range(256)) * 4, {"backend": "b", "job_id": "J", "mode": "hardware"})
+    used = [("ibm_quantum" in (await svc.get_stream("u1")).provenance.sources) for _ in range(3)]
+    assert used == [True, True, False]

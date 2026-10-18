@@ -527,19 +527,31 @@ def purge_idempotency(days: int = 7) -> int:
 # --- draws ------------------------------------------------------------------------------------------------
 
 
-def commit_draw_tx(draw: Draw, commit_receipt: dict[str, Any], idem: IdempotencyRecord | None) -> None:
+class DrawQuotaExceeded(Exception):
+    pass
+
+
+def commit_draw_tx(draw: Draw, commit_receipt: dict[str, Any], idem: IdempotencyRecord | None,
+                   max_per_day: int | None = None) -> None:
     """One transaction: draw row + commit receipt + audit event (+ idempotency record).
 
-    Either all of them exist afterwards or none do. Raises IntegrityError if the idempotency key raced.
+    Either all of them exist afterwards or none do. The audit event is appended first: it takes the audit-head row
+    lock, which serialises concurrent commits, so the daily quota counted after it is exact. Raises IntegrityError
+    if the idempotency key raced and DrawQuotaExceeded if the owner hit `max_per_day`.
     """
     with audit_lock(), session() as s:
+        append_audit(s, draw.owner_id or "anonymous", "draw.commit", draw.id,
+                     {"entries_sha256": draw.entries_sha256, "entries_count": draw.entries_count,
+                      "winners": draw.winners, "commit_receipt_id": draw.commit_receipt_id})
+        if max_per_day is not None and draw.owner_id is not None:
+            today = s.exec(select(func.count()).select_from(Draw).where(Draw.owner_id == draw.owner_id,
+                                                                        Draw.created_at >= _start_of_day())).one()
+            if today >= max_per_day:
+                raise DrawQuotaExceeded
         s.add(_receipt_row(commit_receipt, draw.owner_id))
         s.add(draw)
         if idem is not None:
             s.add(idem)
-        append_audit(s, draw.owner_id or "anonymous", "draw.commit", draw.id,
-                     {"entries_sha256": draw.entries_sha256, "entries_count": draw.entries_count,
-                      "winners": draw.winners, "commit_receipt_id": draw.commit_receipt_id})
         s.commit()
 
 
