@@ -15,7 +15,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from . import db
 from .api import assistant as assistant_api
 from .api import routes, webhooks
-from .assistant.agent import Assistant
+from .assistant.agent import Assistant, Limits
 from .config import Settings, get_settings
 from .entropy import EntropyService
 from .ratelimit import limiter
@@ -35,7 +35,9 @@ def create_app(settings: Settings | None = None, entropy: EntropyService | None 
         if app.state.entropy.harvester:
             app.state.entropy.harvester.start()
         app.state.assistant = assistant or (
-            Assistant(AsyncAnthropic(api_key=s.anthropic_api_key), s.assistant_model, app.state.entropy)
+            Assistant(AsyncAnthropic(api_key=s.anthropic_api_key), s.assistant_model, app.state.entropy,
+                      Limits(s.assistant_daily_messages_per_user, s.assistant_daily_budget_usd,
+                             s.assistant_max_tokens, s.assistant_max_tool_iterations))
             if s.assistant_enabled else None)
         yield
         if app.state.entropy.harvester:

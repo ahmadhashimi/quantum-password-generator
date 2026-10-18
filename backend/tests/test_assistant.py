@@ -3,6 +3,7 @@
 import json
 
 import httpx2
+import pytest
 from anthropic import AsyncAnthropic
 from fastapi.testclient import TestClient
 
@@ -107,3 +108,54 @@ def test_assistant_disabled_without_key():
 def test_crack_time():
     assert crack_time(10) == "instantly"
     assert "years" in crack_time(128)
+
+
+def make_limited_app(api: FakeAPI, limits) -> TestClient:
+    entropy = EntropyService([FakeProvider("lfd")])
+    http = httpx2.AsyncClient(transport=httpx2.MockTransport(api))
+    assistant = Assistant(AsyncAnthropic(api_key="test", max_retries=0, http_client=http), "claude-opus-5-5", entropy,
+                          limits)
+    return TestClient(create_app(settings=get_settings(), entropy=entropy, assistant=assistant))
+
+
+def test_usage_cost_is_recorded_and_caching_requested():
+    from sqlmodel import Session, select
+
+    from app import db
+
+    body = msg([{"type": "text", "text": "Hi"}], "end_turn")
+    body["usage"] = {"input_tokens": 1000, "output_tokens": 500, "cache_read_input_tokens": 2000,
+                     "cache_creation_input_tokens": 0}
+    api = FakeAPI((200, body))
+    with make_app(api) as c:
+        c.post("/api/v2/assistant/chat", json={"message": "hi"})
+    assert api.requests[0]["cache_control"] == {"type": "ephemeral"}
+    with Session(db.engine()) as s:
+        ev = s.exec(select(db.UsageEvent).where(db.UsageEvent.kind == "assistant_message")).one()
+    # 1000*$4 + 500*$20 + 2000*$0.20 per MTok
+    assert ev.cost_usd == pytest.approx((4000 + 10000 + 400) / 1e6)
+    assert ev.input_tokens == 1000 and ev.output_tokens == 500
+
+
+def test_per_user_daily_message_cap():
+    from app.assistant.agent import Limits
+
+    api = FakeAPI((200, msg([{"type": "text", "text": "Hi"}], "end_turn")))
+    with make_limited_app(api, Limits(daily_messages_per_user=2)) as c:
+        for _ in range(2):
+            c.post("/api/v2/assistant/chat", json={"message": "hi"})
+        events = parse_sse(c.post("/api/v2/assistant/chat", json={"message": "hi"}).text)
+    assert len(api.requests) == 2
+    assert events[1][0] == "error" and "limit of 2" in events[1][1]["message"]
+
+
+def test_global_budget_kill_switch():
+    from app import db
+    from app.assistant.agent import Limits
+
+    api = FakeAPI((200, msg([{"type": "text", "text": "Hi"}], "end_turn")))
+    with make_limited_app(api, Limits(daily_budget_usd=1.0)) as c:
+        db.record_usage("someone_else", "assistant_message", cost_usd=1.5)
+        events = parse_sse(c.post("/api/v2/assistant/chat", json={"message": "hi"}).text)
+    assert api.requests == []  # never reached Anthropic
+    assert "budget" in events[1][1]["message"]

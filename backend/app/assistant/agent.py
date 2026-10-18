@@ -44,6 +44,13 @@ to the strength checker in the app, which runs locally in their browser.
 
 log = logging.getLogger(__name__)
 
+# USD per million tokens: (input, output, cache write, cache read). Update when pricing changes.
+PRICING = {
+    "claude-opus-5-5": (4.00, 20.00, 5.00, 0.20),
+    "claude-sonnet-5-5": (2.00, 10.00, 2.50, 0.20),
+    "claude-haiku-5-5": (0.10, 0.50, 0.125, 0.01),
+}
+
 MAX_TURNS = 40
 CONVERSATION_TTL_S = 3600
 MAX_CONVERSATIONS = 1000
@@ -100,16 +107,50 @@ def crack_time(bits: float, guesses_per_second: float = 1e12) -> str:
     return "instantly"
 
 
+@dataclass
+class TokenUsage:
+    input: int = 0
+    output: int = 0
+    cache_write: int = 0
+    cache_read: int = 0
+
+    def add(self, usage: Any) -> None:
+        self.input += usage.input_tokens or 0
+        self.output += usage.output_tokens or 0
+        self.cache_write += getattr(usage, "cache_creation_input_tokens", 0) or 0
+        self.cache_read += getattr(usage, "cache_read_input_tokens", 0) or 0
+
+    def cost(self, model: str) -> float:
+        p_in, p_out, p_write, p_read = PRICING.get(model, PRICING["claude-opus-5-5"])  # unknown: assume priciest
+        return (self.input * p_in + self.output * p_out + self.cache_write * p_write + self.cache_read * p_read) / 1e6
+
+
 def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
 
+@dataclass
+class Limits:
+    daily_messages_per_user: int = 50
+    daily_budget_usd: float = 10.0
+    max_tokens: int = 4000
+    max_tool_iterations: int = 6
+
+
 class Assistant:
-    def __init__(self, client: AsyncAnthropic, model: str, entropy: EntropyService):
+    def __init__(self, client: AsyncAnthropic, model: str, entropy: EntropyService, limits: Limits | None = None):
         self.client = client
         self.model = model
         self.entropy = entropy
+        self.limits = limits or Limits()
         self.store = ConversationStore()
+
+    async def _blocked_reason(self, user_id: str) -> str | None:
+        if await run_in_threadpool(db.assistant_spend_today) >= self.limits.daily_budget_usd:
+            return "The assistant has reached today's usage budget. Please try again tomorrow."
+        if await run_in_threadpool(db.assistant_messages_today, user_id) >= self.limits.daily_messages_per_user:
+            return f"You've reached today's limit of {self.limits.daily_messages_per_user} assistant messages."
+        return None
 
     def _tools(self, user_id: str | None, outbox: list[dict]) -> list:
         entropy = self.entropy
@@ -189,24 +230,30 @@ class Assistant:
         if conv.turns >= MAX_TURNS:
             yield _sse("error", {"message": "This conversation is full. Start a new chat."})
             return
+        if reason := await self._blocked_reason(user_id):
+            yield _sse("error", {"message": reason})
+            yield _sse("done", {})
+            return
         conv.turns += 1
         conv.messages.append({"role": "user", "content": text})
-        await run_in_threadpool(db.record_usage, user_id, "assistant_message")
         outbox: list[dict] = []
+        usage = TokenUsage()
         try:
             runner = self.client.beta.messages.tool_runner(
                 model=self.model,
-                max_tokens=16000,
+                max_tokens=self.limits.max_tokens,
                 system=SYSTEM_PROMPT,
+                cache_control={"type": "ephemeral"},  # system + tools + history are re-sent every turn
                 tools=self._tools(user_id, outbox),
                 messages=list(conv.messages),
                 thinking={"type": "adaptive"},
                 output_config={"effort": "low"},
                 betas=["server-side-fallback-2026-07-01"],
                 fallbacks="default",
-                max_iterations=8,
+                max_iterations=self.limits.max_tool_iterations,
             )
             async for message in runner:
+                usage.add(message.usage)
                 conv.messages.append({"role": "assistant", "content": message.content})
                 for block in message.content:
                     if block.type == "text" and block.text:
@@ -227,4 +274,7 @@ class Assistant:
         except Exception as e:  # surface a friendly error; details stay in server logs
             log.exception("assistant error")
             yield _sse("error", {"message": f"Assistant unavailable ({e.__class__.__name__})."})
+        finally:
+            await run_in_threadpool(db.record_usage, user_id, "assistant_message", input_tokens=usage.input,
+                                    output_tokens=usage.output, cost_usd=round(usage.cost(self.model), 6))
         yield _sse("done", {})

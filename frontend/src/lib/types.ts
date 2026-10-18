@@ -58,6 +58,8 @@ export interface AdminStats {
   events: Record<string, number>;
   total_events: number;
   quantum_share: number;
+  assistant_cost_usd: number;
+  assistant_cost_today_usd: number;
   daily: { date: string; count: number }[];
   recent_users: { id: string; email: string | null; name: string | null; last_seen: string }[];
 }

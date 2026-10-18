@@ -1,4 +1,4 @@
-import { Atom, Users, Zap } from "lucide-react";
+import { Atom, DollarSign, Users, Zap } from "lucide-react";
 import { useApi } from "../hooks/useApi";
 import { apiGet } from "../lib/api";
 import { useAppAuth } from "../lib/auth";
@@ -25,10 +25,11 @@ export function AdminDashboard() {
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-semibold">Usage</h1>
-      <div className="grid gap-4 sm:grid-cols-3">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Stat icon={Users} label="Users" value={data.users.toLocaleString()} />
         <Stat icon={Zap} label="Secrets generated" value={data.total_events.toLocaleString()} />
         <Stat icon={Atom} label="Quantum-sourced" value={`${Math.round(data.quantum_share * 100)}%`} />
+        <Stat icon={DollarSign} label="AI spend today" value={`$${data.assistant_cost_today_usd.toFixed(2)}`} />
       </div>
 
       <section className="glass p-6" aria-labelledby="daily-title">

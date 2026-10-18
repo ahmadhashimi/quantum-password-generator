@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     # Assistant
     anthropic_api_key: str | None = None
     assistant_model: str = "claude-opus-5-5"
+    # Cost guardrails
+    assistant_daily_messages_per_user: int = 50
+    assistant_daily_budget_usd: float = 10.0  # global kill switch: assistant pauses when today's spend hits this
+    assistant_max_tokens: int = 4000
+    assistant_max_tool_iterations: int = 6
 
     # Clerk
     clerk_secret_key: str | None = None
