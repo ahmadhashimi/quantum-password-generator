@@ -286,7 +286,8 @@ def test_interrupted_draw_reuses_persisted_seed(client):
     commit = client.post("/api/v2/draws", json={"title": "Recover", "entries": entries, "winners": 1}).json()
     draw_id = commit["draw_id"]
     seed = bytes(range(64))
-    claimed = db.claim_draw_seeded(draw_id, None, seed, PROV)
+    owner = db.get_draw(draw_id).owner_id
+    claimed = db.claim_draw_seeded(draw_id, owner, seed, PROV)
     assert claimed and claimed.seed_hex == seed.hex()
     assert db.mark_interrupted_draws() == 1
     assert db.get_draw(draw_id).status == "needs_investigation"
@@ -295,7 +296,7 @@ def test_interrupted_draw_reuses_persisted_seed(client):
     receipt_again, winners_again = _calculate_result(db.get_draw(draw_id), signer)
     assert winners == winners_again
     assert receipt["payload"]["details"]["selection"] == receipt_again["payload"]["details"]["selection"]
-    db.finish_draw_tx(draw_id, None, receipt)
+    db.finish_draw_tx(draw_id, owner, receipt)
     assert db.get_draw(draw_id).status == "done"
     assert db.get_receipt(receipt["payload"]["receipt_id"]) is not None
     assert client.post(f"/api/v2/draws/{draw_id}/run").status_code == 409
