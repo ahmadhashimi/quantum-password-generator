@@ -1,8 +1,8 @@
 """User + usage tracking. Stores metadata only — never passwords, passphrases, or chat contents."""
 
-from datetime import UTC, datetime
 import hashlib
 import json
+from datetime import UTC, datetime
 
 from sqlmodel import Field, Session, SQLModel, create_engine, func, select
 
