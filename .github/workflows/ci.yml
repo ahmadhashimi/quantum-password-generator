@@ -26,6 +26,34 @@ jobs:
       - run: bandit -q -r app -s B104
       - run: pip-audit --require-hashes --disable-pip -r requirements.lock -r requirements-ibm.lock
 
+  backend-postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: qpg_test
+          POSTGRES_USER: qpg_test
+          POSTGRES_PASSWORD: qpg_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U qpg_test -d qpg_test"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      QPG_TEST_POSTGRES: "1"
+      PG_TEST_ADMIN_DSN: "postgresql://qpg_test:qpg_test@localhost:5432/qpg_test"
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.13"
+      - run: pip install --require-hashes --no-deps -r requirements.lock -r requirements-ibm.lock
+      - run: pip install -r requirements-dev.txt qiskit-aer
+      - run: pytest
+
   frontend:
     runs-on: ubuntu-latest
     defaults:
