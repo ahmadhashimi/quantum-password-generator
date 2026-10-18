@@ -242,3 +242,74 @@ def test_signatures_are_domain_separated():
     pub = Ed25519PublicKey.from_public_bytes(unb64(s.public_keys()["ed25519"]))
     with pytest.raises(InvalidSignature):
         pub.verify(unb64(receipt["signatures"]["ed25519"]), canonical(receipt["payload"]))
+
+
+def test_public_selection_seed_reproduces_winners(client):
+    from app.entropy.mixer import KeyStream
+    from app.generator import draw_winners
+    entries = ["c", "a", "b", "d", "e"]
+    _, result = commit_and_run(client, entries, winners=2)
+    receipt = result["receipt"]["payload"]
+    seed = bytes.fromhex(receipt["details"]["selection"]["seed_hex"])
+    assert len(seed) == 64
+    expected = draw_winners(KeyStream(seed), sorted(entries), 2)
+    assert [w["index"] for w in result["winners"]] == expected
+    verification = client.post("/api/v2/receipts/verify", json={
+        "receipt_id": receipt["receipt_id"], "entries": entries}).json()
+    assert verification["valid"] is True
+    assert verification["entries_match"] is True
+    assert verification["selection_matches"] is True
+
+
+def test_atomic_draw_commit_rolls_back_with_audit_error(monkeypatch, client):
+    from app import db
+    from app.receipts import build_receipt
+    signer = Signer.generate()
+    receipt, _ = build_receipt(signer, "draw_commit",
+                               {"sources": [], "quantum": False, "quantum_bytes": 0,
+                                "mixed_with": "none"})
+    draw = db.Draw(id="draw_atomic", title="atomic", entries_json='["a"]', entries_sha256="h",
+                   entries_count=1, winners=1, commit_receipt_id=receipt["payload"]["receipt_id"])
+    def fail(*args, **kwargs):
+        raise RuntimeError("injected audit failure")
+    monkeypatch.setattr(db, "append_audit", fail)
+    with pytest.raises(RuntimeError, match="injected"):
+        db.commit_draw_tx(draw, receipt, None)
+    assert db.get_draw(draw.id) is None
+    assert db.get_receipt(receipt["payload"]["receipt_id"]) is None
+
+
+def test_interrupted_draw_reuses_persisted_seed(client):
+    from app import db
+    from app.api.receipts import _calculate_result
+    entries = ["alice", "bob", "carol"]
+    commit = client.post("/api/v2/draws", json={"title": "Recover", "entries": entries, "winners": 1}).json()
+    draw_id = commit["draw_id"]
+    seed = bytes(range(64))
+    claimed = db.claim_draw_seeded(draw_id, None, seed, PROV)
+    assert claimed and claimed.seed_hex == seed.hex()
+    assert db.mark_interrupted_draws() == 1
+    assert db.get_draw(draw_id).status == "needs_investigation"
+    signer = client.app.state.signer
+    receipt, winners = _calculate_result(db.get_draw(draw_id), signer)
+    receipt_again, winners_again = _calculate_result(db.get_draw(draw_id), signer)
+    assert winners == winners_again
+    assert receipt["payload"]["details"]["selection"] == receipt_again["payload"]["details"]["selection"]
+    db.finish_draw_tx(draw_id, None, receipt)
+    assert db.get_draw(draw_id).status == "done"
+    assert db.get_receipt(receipt["payload"]["receipt_id"]) is not None
+    assert client.post(f"/api/v2/draws/{draw_id}/run").status_code == 409
+    assert db.verify_audit_chain()["valid"] is True
+
+
+def test_audit_chain_detects_field_tampering(client):
+    from sqlmodel import Session
+    from app import db
+    commit_and_run(client, ["one", "two"], winners=1)
+    assert db.verify_audit_chain()["valid"] is True
+    with Session(db.engine()) as session:
+        first = session.get(db.AuditEvent, 1)
+        first.action = "draw.unlogged_mutation"
+        session.add(first)
+        session.commit()
+    assert db.verify_audit_chain()["valid"] is False
