@@ -111,7 +111,7 @@ def clerk(monkeypatch):
     monkeypatch.setenv("ENVIRONMENT", "production")
     get_settings.cache_clear()
 
-    def token(sub="user_123", role=None, azp="http://localhost:5173", exp_in=60, fva=None):
+    def token(sub="user_123", role=None, azp="http://localhost:3000", exp_in=60, fva=None):
         now = int(time.time())
         claims = {"sub": sub, "iat": now, "nbf": now, "exp": now + exp_in, "azp": azp, "sid": "sess_1",
                   "iss": "https://test.clerk.accounts.dev", "email": "a@b.co", "name": "Ada",
@@ -189,19 +189,6 @@ def test_clerk_webhook_signature(monkeypatch):
     assert u.email == "grace@example.com" and u.name == "Grace Hopper"
 
 
-def test_cache_headers_for_static_assets(tmp_path, monkeypatch):
-    dist = tmp_path / "dist"
-    (dist / "assets").mkdir(parents=True)
-    (dist / "index.html").write_text("<html></html>")
-    (dist / "assets" / "index-abc123.js").write_text("console.log(1)")
-    monkeypatch.setenv("FRONTEND_DIST", str(dist))
-    get_settings.cache_clear()
-    with make_client() as c:
-        assert "immutable" in c.get("/assets/index-abc123.js").headers["cache-control"]
-        assert c.get("/").headers["cache-control"] == "no-cache"
-        assert c.get("/api/v2/health").headers["cache-control"].startswith("no-store")
-
-
 def test_spoofed_forwarded_for_is_ignored_without_trusted_proxy(monkeypatch):
     monkeypatch.setenv("RATE_LIMIT_ANONYMOUS", "2/minute")
     monkeypatch.setenv("ENVIRONMENT", "production")  # no auto-signed-in dev user
@@ -245,21 +232,17 @@ def test_body_size_limit(client):
     assert r.status_code == 413
 
 
-def test_nul_byte_path_is_404_not_500(tmp_path, monkeypatch):
-    dist = tmp_path / "dist"
-    (dist / "assets").mkdir(parents=True)
-    (dist / "index.html").write_text("<html></html>")
-    monkeypatch.setenv("FRONTEND_DIST", str(dist))
-    get_settings.cache_clear()
-    with make_client() as c:
-        assert c.get("/foo%00bar").status_code == 404
+def test_api_responses_are_locked_down_json(client):
+    """The API serves JSON only: nothing cacheable, nothing framable, no content allowed to load."""
+    for path in ("/api/v2/health", "/.well-known/quantumpass-keys.json", "/api/v2/nope"):
+        h = client.get(path).headers
+        assert h["cache-control"].startswith("no-store")
+        assert h["content-security-policy"].startswith("default-src 'none'")
 
 
-def test_production_csp_drops_clerk_wildcards(monkeypatch):
-    from app.config import Settings
-    from app.security import content_security_policy
+def test_no_spa_catch_all(client):
+    """The website is served by Next.js now; FastAPI 404s anything it doesn't route (including NUL paths)."""
+    assert client.get("/").status_code == 404
+    assert client.get("/verify/AAAAAAAAAAAAAAAA").status_code == 404
+    assert client.get("/foo%00bar").status_code == 404
 
-    s = Settings(_env_file=None, environment="production", clerk_hosts=["https://*.clerk.accounts.dev",
-                                                                         "https://clerk.example.com"])
-    csp = content_security_policy(s)
-    assert "accounts.dev" not in csp and "https://clerk.example.com" in csp

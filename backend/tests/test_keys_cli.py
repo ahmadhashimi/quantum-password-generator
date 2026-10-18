@@ -104,3 +104,12 @@ def test_short_passphrase_rejected(monkeypatch, tmp_path):
     Signer.load_or_create(str(key_file))
     with pytest.raises(SystemExit):
         keys.main(["backup", "--key-file", str(key_file), "--out", str(tmp_path / "b")])
+
+
+def test_backup_to_stdout(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("QPG_BACKUP_PASSPHRASE", PASS)
+    key_file = tmp_path / "k.json"
+    s = Signer.load_or_create(str(key_file))
+    assert keys.main(["backup", "--key-file", str(key_file), "--out", "-", "--scrypt-log-n", "14"]) == 0
+    blob = json.loads(capsys.readouterr().out)
+    assert keys.restore(blob, PASS).public_keys() == s.public_keys()

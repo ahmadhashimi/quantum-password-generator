@@ -1,9 +1,9 @@
 """Signing-key operations: inspect, back up, restore, rotate, revoke.
 
-    python -m scripts.keys show-public  --key-file data/signing_key.json
-    python -m scripts.keys backup       --key-file data/signing_key.json --out key-backup.qpgkey
-    python -m scripts.keys restore      --in key-backup.qpgkey --key-file data/signing_key.json
-    python -m scripts.keys rotate       --key-file data/signing_key.json [--retired retired.json]
+    python -m scripts.keys show-public  --key-file data/signing_keys.json
+    python -m scripts.keys backup       --key-file data/signing_keys.json --out key-backup.qpgkey   (or --out -)
+    python -m scripts.keys restore      --in key-backup.qpgkey --key-file data/signing_keys.json
+    python -m scripts.keys rotate       --key-file data/signing_keys.json [--retired retired.json]
     python -m scripts.keys revoke       --key-id 0123456789abcdef --at 1767225600 --retired retired.json
 
 Backups are encrypted with a passphrase (scrypt -> AES-256-GCM); the passphrase comes from QPG_BACKUP_PASSPHRASE
@@ -152,7 +152,10 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(load_signer(Path(a.key_file)).public_keys(), indent=2))
         elif a.cmd == "backup":
             blob = backup(load_signer(Path(a.key_file)), _passphrase(confirm=True), a.scrypt_log_n)
-            write_private(Path(a.out), json.dumps(blob, indent=2))
+            if a.out == "-":  # stream to stdout (e.g. out of a read-only container); the blob is encrypted
+                print(json.dumps(blob, indent=2))
+            else:
+                write_private(Path(a.out), json.dumps(blob, indent=2))
             print(f"Encrypted backup of key {blob['key_id']} written to {a.out}. Store it offline, apart from the "
                   "passphrase.", file=sys.stderr)
         elif a.cmd == "restore":

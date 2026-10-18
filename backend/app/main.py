@@ -1,15 +1,12 @@
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from pathlib import Path
 from typing import Any
 
 import httpx
 from anthropic import AsyncAnthropic
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
@@ -95,19 +92,6 @@ def create_app(settings: Settings | None = None, entropy: EntropyService | None 
     app.include_router(receipts_api.router)
     app.include_router(admin_api.router)
 
-    dist = Path(s.frontend_dist)
-    if (dist / "index.html").exists():
-        app.mount("/assets", StaticFiles(directory=dist / "assets"), name="assets")
-
-        @app.get("/{path:path}", include_in_schema=False)
-        def spa(path: str) -> FileResponse:  # sync: filesystem checks run in the threadpool
-            if path.startswith("api/") or "\x00" in path or "\\" in path:
-                raise HTTPException(404)
-            f = (dist / path).resolve()
-            if path and f.is_file() and f.is_relative_to(dist.resolve()):
-                return FileResponse(f)
-            return FileResponse(dist / "index.html")
-
     app.add_middleware(SlowAPIMiddleware)
     app.add_middleware(BodySizeLimitMiddleware, max_bytes=1_000_000)
     app.add_middleware(CORSMiddleware, allow_origins=s.allowed_origins, allow_credentials=True,
@@ -117,9 +101,6 @@ def create_app(settings: Settings | None = None, entropy: EntropyService | None 
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=s.allowed_hosts)
     app.add_middleware(SecurityHeadersMiddleware, settings=s)
     app.add_middleware(RequestContextMiddleware)  # outermost: every response and log line gets a request id
-    if s.environment != "development" and s.auth_enabled and not any(
-            "*" not in h and "accounts.dev" not in h for h in s.clerk_hosts):
-        log.warning("CLERK_HOSTS has no production Frontend API host; sign-in will be blocked")
     return app
 
 

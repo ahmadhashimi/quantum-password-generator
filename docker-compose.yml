@@ -1,34 +1,78 @@
-# Production: Caddy (TLS + reverse proxy) in front of the app. Only Caddy is exposed.
-#   DOMAIN=quantumpass.example.com docker compose up -d --build
+# Production: Caddy (TLS + routing) in front of the Next.js site and the FastAPI API, with PostgreSQL.
+# Only Caddy publishes ports; Postgres sits on an internal network with no internet access.
+#   cp deploy/.env.example deploy/.env   # fill in, chmod 600
+#   docker compose --env-file deploy/.env up -d --build
+# Rollback: set API_IMAGE / WEB_IMAGE to a previous tag and `up -d` (see docs/RUNBOOK.md).
 services:
-  app:
-    build:
-      context: .
-      args:
-        VITE_CLERK_PUBLISHABLE_KEY: ${VITE_CLERK_PUBLISHABLE_KEY:-}
-        WITH_IBM: "true"
-    env_file: backend/.env
+  postgres:
+    image: postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
     environment:
-      # `environment` overrides env_file, so these can't be accidentally replaced by dev values.
+      POSTGRES_DB: qpg
+      POSTGRES_USER: qpg
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env}
+      TZ: UTC
+    volumes: [pg_data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U qpg -d qpg"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    networks: [db]
+
+  api:
+    image: ${API_IMAGE:-quantumpass-api:local}
+    build:
+      context: backend
+      args:
+        WITH_IBM: "true"
+    env_file: deploy/.env
+    environment:
+      # `environment` overrides env_file, so these can't be replaced by dev values.
       ENVIRONMENT: production
-      ALLOWED_HOSTS: '["${DOMAIN}", "localhost"]'
+      LOG_FORMAT: json
+      ALLOWED_HOSTS: '["${DOMAIN:?set DOMAIN}", "api", "localhost"]'
       ALLOWED_ORIGINS: '["https://${DOMAIN}"]'
-      CLERK_HOSTS: '["https://clerk.${DOMAIN}"]'
-      DATABASE_URL: sqlite:////data/qpg.db
+      DATABASE_URL: postgresql+psycopg://qpg:${POSTGRES_PASSWORD}@postgres:5432/qpg
       POOL_PATH: /data/entropy_pool.bin
       SIGNING_KEY_PATH: /data/signing_keys.json
-      FORWARDED_ALLOW_IPS: 10.88.0.2
-    volumes:
-      - app-data:/data
+      FORWARDED_ALLOW_IPS: 10.88.0.2,10.88.0.4
+    volumes: [api_data:/data]
     read_only: true
     tmpfs: [/tmp]
     security_opt: [no-new-privileges:true]
     cap_drop: [ALL]
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
     expose: ["8000"]
     networks:
       edge:
         ipv4_address: 10.88.0.3
+      db: {}
+
+  web:
+    image: ${WEB_IMAGE:-quantumpass-web:local}
+    build:
+      context: web
+      args:
+        NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:-}
+    environment:
+      API_INTERNAL_URL: http://api:8000
+      CLERK_SECRET_KEY: ${CLERK_SECRET_KEY:-}
+      NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:-}
+    read_only: true
+    tmpfs: [/tmp, /app/.next/cache]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    depends_on: [api]
+    restart: unless-stopped
+    expose: ["3000"]
+    networks:
+      edge:
+        ipv4_address: 10.88.0.4
 
   caddy:
     image: caddy:2.10-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
@@ -37,9 +81,9 @@ services:
     ports: ["80:80", "443:443", "443:443/udp"]
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy-data:/data
-      - caddy-config:/config
-    depends_on: [app]
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [web, api]
     restart: unless-stopped
     networks:
       edge:
@@ -50,8 +94,11 @@ networks:
     ipam:
       config:
         - subnet: 10.88.0.0/29
+  db:
+    internal: true
 
 volumes:
-  app-data:
-  caddy-data:
-  caddy-config:
+  pg_data:
+  api_data:
+  caddy_data:
+  caddy_config:

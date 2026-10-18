@@ -1,0 +1,1066 @@
+{
+ "components": {
+  "schemas": {
+   "ChatRequest": {
+    "properties": {
+     "conversation_id": {
+      "anyOf": [
+       {
+        "maxLength": 64,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Conversation Id"
+     },
+     "message": {
+      "maxLength": 2000,
+      "minLength": 1,
+      "title": "Message",
+      "type": "string"
+     }
+    },
+    "required": [
+     "message"
+    ],
+    "title": "ChatRequest",
+    "type": "object"
+   },
+   "DrawCommit": {
+    "properties": {
+     "entries": {
+      "items": {
+       "maxLength": 400,
+       "type": "string"
+      },
+      "maxItems": 10000,
+      "minItems": 1,
+      "title": "Entries",
+      "type": "array"
+     },
+     "title": {
+      "maxLength": 200,
+      "minLength": 1,
+      "title": "Title",
+      "type": "string"
+     },
+     "winners": {
+      "default": 1,
+      "maximum": 100.0,
+      "minimum": 1.0,
+      "title": "Winners",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "title",
+     "entries"
+    ],
+    "title": "DrawCommit",
+    "type": "object"
+   },
+   "HTTPValidationError": {
+    "properties": {
+     "detail": {
+      "items": {
+       "$ref": "#/components/schemas/ValidationError"
+      },
+      "title": "Detail",
+      "type": "array"
+     }
+    },
+    "title": "HTTPValidationError",
+    "type": "object"
+   },
+   "ReceiptIn": {
+    "properties": {
+     "algorithms": {
+      "anyOf": [
+       {
+        "items": {
+         "maxLength": 16,
+         "type": "string"
+        },
+        "maxItems": 4,
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Algorithms"
+     },
+     "payload": {
+      "additionalProperties": true,
+      "title": "Payload",
+      "type": "object"
+     },
+     "signatures": {
+      "additionalProperties": {
+       "maxLength": 8192,
+       "type": "string"
+      },
+      "maxProperties": 4,
+      "propertyNames": {
+       "maxLength": 16
+      },
+      "title": "Signatures",
+      "type": "object"
+     }
+    },
+    "required": [
+     "payload",
+     "signatures"
+    ],
+    "title": "ReceiptIn",
+    "type": "object"
+   },
+   "ValidationError": {
+    "properties": {
+     "ctx": {
+      "title": "Context",
+      "type": "object"
+     },
+     "input": {
+      "title": "Input"
+     },
+     "loc": {
+      "items": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "integer"
+        }
+       ]
+      },
+      "title": "Location",
+      "type": "array"
+     },
+     "msg": {
+      "title": "Message",
+      "type": "string"
+     },
+     "type": {
+      "title": "Error Type",
+      "type": "string"
+     }
+    },
+    "required": [
+     "loc",
+     "msg",
+     "type"
+    ],
+    "title": "ValidationError",
+    "type": "object"
+   },
+   "VerifyRequest": {
+    "properties": {
+     "entries": {
+      "anyOf": [
+       {
+        "items": {
+         "maxLength": 400,
+         "type": "string"
+        },
+        "maxItems": 10000,
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Entries"
+     },
+     "receipt": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/ReceiptIn"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "receipt_id": {
+      "anyOf": [
+       {
+        "maxLength": 64,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Receipt Id"
+     },
+     "salt": {
+      "anyOf": [
+       {
+        "maxLength": 128,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Salt"
+     },
+     "value": {
+      "anyOf": [
+       {
+        "maxLength": 4096,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Value"
+     }
+    },
+    "title": "VerifyRequest",
+    "type": "object"
+   }
+  }
+ },
+ "info": {
+  "title": "Quantum Password Generator",
+  "version": "2.1.0"
+ },
+ "openapi": "3.1.0",
+ "paths": {
+  "/api/v2/admin/audit": {
+   "get": {
+    "operationId": "audit_events_api_v2_admin_audit_get",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "after",
+      "required": false,
+      "schema": {
+       "default": 0,
+       "minimum": 0,
+       "title": "After",
+       "type": "integer"
+      }
+     },
+     {
+      "in": "query",
+      "name": "limit",
+      "required": false,
+      "schema": {
+       "default": 100,
+       "maximum": 500,
+       "minimum": 1,
+       "title": "Limit",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Audit Events"
+   }
+  },
+  "/api/v2/admin/audit/verify": {
+   "get": {
+    "operationId": "audit_verify_api_v2_admin_audit_verify_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Audit Verify"
+   }
+  },
+  "/api/v2/admin/draws/investigate": {
+   "get": {
+    "operationId": "draws_needing_investigation_api_v2_admin_draws_investigate_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Draws Needing Investigation"
+   }
+  },
+  "/api/v2/admin/draws/{draw_id}/complete": {
+   "post": {
+    "description": "Publish an interrupted draw from its persisted seed: the same winners it was always going to have.",
+    "operationId": "complete_draw_api_v2_admin_draws__draw_id__complete_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "draw_id",
+      "required": true,
+      "schema": {
+       "title": "Draw Id",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Complete Draw"
+   }
+  },
+  "/api/v2/admin/stats": {
+   "get": {
+    "operationId": "admin_api_v2_admin_stats_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Admin"
+   }
+  },
+  "/api/v2/assistant/chat": {
+   "post": {
+    "operationId": "chat_api_v2_assistant_chat_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ChatRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Chat"
+   }
+  },
+  "/api/v2/assistant/conversations/{conv_id}": {
+   "delete": {
+    "operationId": "delete_conversation_api_v2_assistant_conversations__conv_id__delete",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "conv_id",
+      "required": true,
+      "schema": {
+       "title": "Conv Id",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Delete Conversation"
+   }
+  },
+  "/api/v2/config": {
+   "get": {
+    "operationId": "public_config_api_v2_config_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Public Config"
+   }
+  },
+  "/api/v2/draws": {
+   "post": {
+    "operationId": "commit_draw_api_v2_draws_post",
+    "parameters": [
+     {
+      "in": "header",
+      "name": "Idempotency-Key",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Idempotency-Key"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/DrawCommit"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Commit Draw"
+   }
+  },
+  "/api/v2/draws/{draw_id}/run": {
+   "post": {
+    "operationId": "run_draw_api_v2_draws__draw_id__run_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "draw_id",
+      "required": true,
+      "schema": {
+       "title": "Draw Id",
+       "type": "string"
+      }
+     },
+     {
+      "in": "header",
+      "name": "Idempotency-Key",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Idempotency-Key"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Run Draw"
+   }
+  },
+  "/api/v2/entropy/status": {
+   "get": {
+    "operationId": "entropy_status_api_v2_entropy_status_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Entropy Status"
+   }
+  },
+  "/api/v2/health": {
+   "get": {
+    "operationId": "health_api_v2_health_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Health"
+   }
+  },
+  "/api/v2/me": {
+   "get": {
+    "operationId": "me_api_v2_me_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Me"
+   }
+  },
+  "/api/v2/me/receipts": {
+   "get": {
+    "description": "Issuance history: receipt metadata only (receipts never contain secrets).",
+    "operationId": "my_receipts_api_v2_me_receipts_get",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "before",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "format": "date-time",
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Before"
+      }
+     },
+     {
+      "in": "query",
+      "name": "limit",
+      "required": false,
+      "schema": {
+       "default": 50,
+       "maximum": 200,
+       "minimum": 1,
+       "title": "Limit",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "My Receipts"
+   }
+  },
+  "/api/v2/me/usage": {
+   "get": {
+    "operationId": "my_usage_api_v2_me_usage_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "My Usage"
+   }
+  },
+  "/api/v2/passphrase": {
+   "get": {
+    "operationId": "passphrase_api_v2_passphrase_get",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "words",
+      "required": false,
+      "schema": {
+       "default": 6,
+       "maximum": 16,
+       "minimum": 3,
+       "title": "Words",
+       "type": "integer"
+      }
+     },
+     {
+      "in": "query",
+      "name": "separator",
+      "required": false,
+      "schema": {
+       "default": "-",
+       "enum": [
+        "-",
+        "_",
+        ".",
+        " ",
+        ""
+       ],
+       "title": "Separator",
+       "type": "string"
+      }
+     },
+     {
+      "in": "query",
+      "name": "capitalize",
+      "required": false,
+      "schema": {
+       "default": false,
+       "title": "Capitalize",
+       "type": "boolean"
+      }
+     },
+     {
+      "in": "query",
+      "name": "add_number",
+      "required": false,
+      "schema": {
+       "default": false,
+       "title": "Add Number",
+       "type": "boolean"
+      }
+     },
+     {
+      "in": "query",
+      "name": "receipt",
+      "required": false,
+      "schema": {
+       "default": false,
+       "title": "Receipt",
+       "type": "boolean"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Passphrase"
+   }
+  },
+  "/api/v2/password": {
+   "get": {
+    "operationId": "password_api_v2_password_get",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "length",
+      "required": false,
+      "schema": {
+       "default": 20,
+       "maximum": 128,
+       "minimum": 4,
+       "title": "Length",
+       "type": "integer"
+      }
+     },
+     {
+      "in": "query",
+      "name": "upper",
+      "required": false,
+      "schema": {
+       "default": true,
+       "title": "Upper",
+       "type": "boolean"
+      }
+     },
+     {
+      "in": "query",
+      "name": "lower",
+      "required": false,
+      "schema": {
+       "default": true,
+       "title": "Lower",
+       "type": "boolean"
+      }
+     },
+     {
+      "in": "query",
+      "name": "digits",
+      "required": false,
+      "schema": {
+       "default": true,
+       "title": "Digits",
+       "type": "boolean"
+      }
+     },
+     {
+      "in": "query",
+      "name": "symbols",
+      "required": false,
+      "schema": {
+       "default": true,
+       "title": "Symbols",
+       "type": "boolean"
+      }
+     },
+     {
+      "in": "query",
+      "name": "exclude_ambiguous",
+      "required": false,
+      "schema": {
+       "default": false,
+       "title": "Exclude Ambiguous",
+       "type": "boolean"
+      }
+     },
+     {
+      "in": "query",
+      "name": "require_each",
+      "required": false,
+      "schema": {
+       "default": true,
+       "title": "Require Each",
+       "type": "boolean"
+      }
+     },
+     {
+      "in": "query",
+      "name": "receipt",
+      "required": false,
+      "schema": {
+       "default": false,
+       "title": "Receipt",
+       "type": "boolean"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Password"
+   }
+  },
+  "/api/v2/random": {
+   "get": {
+    "operationId": "random_bytes_api_v2_random_get",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "bytes",
+      "required": false,
+      "schema": {
+       "default": 32,
+       "maximum": 1024,
+       "minimum": 1,
+       "title": "Bytes",
+       "type": "integer"
+      }
+     },
+     {
+      "in": "query",
+      "name": "receipt",
+      "required": false,
+      "schema": {
+       "default": false,
+       "title": "Receipt",
+       "type": "boolean"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Random Bytes"
+   }
+  },
+  "/api/v2/receipts/keys": {
+   "get": {
+    "operationId": "signing_keys_api_v2_receipts_keys_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Signing Keys"
+   }
+  },
+  "/api/v2/receipts/verify": {
+   "post": {
+    "operationId": "verify_api_v2_receipts_verify_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/VerifyRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Verify"
+   }
+  },
+  "/api/v2/receipts/{receipt_id}": {
+   "get": {
+    "operationId": "get_receipt_api_v2_receipts__receipt_id__get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "receipt_id",
+      "required": true,
+      "schema": {
+       "title": "Receipt Id",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Get Receipt"
+   }
+  },
+  "/api/v2/receipts/{receipt_id}/verify-material": {
+   "get": {
+    "description": "Everything an independent verifier needs, byte-exact: the stored canonical payload (Python float formatting\nsuch as `128.0` can't be reproduced by JSON.stringify), the signing domain and the signing key's public entry.\nThe key comes from this server too: compare its key_id with a copy of the key set you trust.",
+    "operationId": "receipt_verify_material_api_v2_receipts__receipt_id__verify_material_get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "receipt_id",
+      "required": true,
+      "schema": {
+       "title": "Receipt Id",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Receipt Verify Material"
+   }
+  }
+ }
+}

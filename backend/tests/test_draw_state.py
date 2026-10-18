@@ -158,7 +158,7 @@ def test_cross_user_isolation(monkeypatch):
 
     def auth(sub):
         now = int(time.time())
-        tok = jwt.encode({"sub": sub, "iat": now, "nbf": now, "exp": now + 60, "azp": "http://localhost:5173",
+        tok = jwt.encode({"sub": sub, "iat": now, "nbf": now, "exp": now + 60, "azp": "http://localhost:3000",
                           "sid": "s"}, key, algorithm="RS256")
         return {"Authorization": f"Bearer {tok}"}
 

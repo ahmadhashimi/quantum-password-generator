@@ -91,7 +91,7 @@ def test_admin_denials_are_audited_and_throttled(monkeypatch):
     db._throttle.clear()
     now = int(time.time())
     tok = jwt.encode({"sub": "user_mallory", "iat": now, "nbf": now, "exp": now + 60,
-                      "azp": "http://localhost:5173", "sid": "s"}, key, algorithm="RS256")
+                      "azp": "http://localhost:3000", "sid": "s"}, key, algorithm="RS256")
     with TestClient(create_app(settings=get_settings(), entropy=EntropyService([FakeProvider("lfd")]))) as c:
         for _ in range(5):
             assert c.get("/api/v2/admin/audit", headers={"Authorization": f"Bearer {tok}"}).status_code == 403

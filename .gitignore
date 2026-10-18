@@ -27,3 +27,11 @@ signing_keys.json
 
 # Pre-filing invention notes and raw audit output — never publish
 private/
+
+# Backups and key material
+backups/
+*.dump
+*.qpgkey
+signing_keys*.json
+*.retired
+.mypy_cache/

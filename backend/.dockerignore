@@ -1,0 +1,13 @@
+.env
+.env.*
+!.env.example
+*.db
+*.db-*
+signing_keys*.json
+*.qpgkey
+entropy_pool.bin
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+tests/

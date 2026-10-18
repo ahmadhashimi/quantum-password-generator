@@ -1,5 +1,5 @@
-# Reverse proxy: automatic HTTPS (Let's Encrypt), HTTP/3, compression, body size limit.
-# Set DOMAIN in the environment (e.g. quantumpass.example.com).
+# Only Caddy is internet-facing. API paths go straight to FastAPI, so generated secrets never pass through the
+# Next.js server; everything else is the website.
 {$DOMAIN} {
 	encode zstd gzip
 
@@ -7,15 +7,26 @@
 		max_size 1MB
 	}
 
-	reverse_proxy app:8000 {
-		# Stream assistant replies (server-sent events) immediately instead of buffering.
-		flush_interval -1
-		header_up X-Forwarded-For {remote_host}
+	@api path /api/v2/* /quantum-* /.well-known/quantumpass-keys.json
+	handle @api {
+		reverse_proxy api:8000 {
+			flush_interval -1 # stream assistant replies (SSE) without buffering
+			header_up X-Forwarded-For {remote_host}
+		}
 	}
 
-	# The app sets its own security headers; hide server fingerprints.
-	header -Server
+	handle {
+		reverse_proxy web:3000 {
+			header_up X-Forwarded-For {remote_host}
+		}
+	}
 
+	header {
+		-Server
+		Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+	}
+
+	# JSON access log; Caddy redacts Authorization and Cookie headers by default.
 	log {
 		output stdout
 		format json

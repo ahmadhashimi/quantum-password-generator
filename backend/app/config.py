@@ -12,13 +12,14 @@ class Settings(BaseSettings):
 
     # Safe by default: development mode (auto-signed-in local admin when Clerk is off) must be opted into.
     environment: Literal["development", "production", "test"] = "production"
-    allowed_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173", "http://localhost:8000"])
+    # Browser origins allowed to call the API cross-origin (local Next.js dev server). In production the site and
+    # the API share one origin behind Caddy, so CORS is not exercised; keep this to your own domain.
+    allowed_origins: list[str] = Field(default_factory=lambda: ["http://localhost:3000"])
     # Host header allowlist; also blocks DNS-rebinding attacks against a local dev server. Set your domain in prod.
     allowed_hosts: list[str] = Field(default_factory=lambda: ["localhost", "127.0.0.1"])
     log_format: Literal["json", "text"] | None = None  # default: text in development, JSON lines otherwise
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     admin_require_mfa: bool = True  # admin API needs a second factor verified within the last hour
-    frontend_dist: str = "../frontend/dist"
 
     # Quantum entropy providers
     anu_api_key: str | None = None
@@ -58,8 +59,6 @@ class Settings(BaseSettings):
     clerk_secret_key: str | None = None
     clerk_jwt_key: str | None = None  # optional PEM for networkless verification
     clerk_webhook_secret: str | None = None
-    # Hosts Clerk's browser SDK loads from (CSP). Add your production Clerk Frontend API host.
-    clerk_hosts: list[str] = Field(default_factory=lambda: ["https://*.clerk.accounts.dev"])
 
     # Receipt signing keys: SIGNING_KEYS (JSON of base64 seeds) or a 0600 key file created on first start.
     signing_keys: str | None = None
