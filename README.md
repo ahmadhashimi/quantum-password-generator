@@ -6,7 +6,7 @@
 
 ### Secrets built for the quantum era.
 
-Passwords, passphrases, keys and fair draws seeded by qubits on **real IBM quantum computers**, health-tested, mixed with your system's secure RNG, and sealed with a **lattice-based post-quantum signature** that proves where every bit came from.
+Passwords, passphrases, keys and fair draws seeded by qubits on **real IBM quantum computers**, health-tested, mixed with your system's secure RNG, and sealed with a **lattice-based post-quantum signature** that records what this server asserts about the source of the entropy.
 
 [![CI](https://github.com/ahmadhashimi/quantum-password-generator/actions/workflows/ci.yml/badge.svg?branch=v2)](https://github.com/ahmadhashimi/quantum-password-generator/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white)
@@ -42,7 +42,7 @@ QuantumPass is a small, production-hardened answer to both.
 >
 > Every week Sam issues passwords, API keys and agent credentials. Auditors keep asking the same question: *"How were these generated, and can you prove it?"* And every signature Sam relies on uses math a large quantum computer will break.
 >
-> With QuantumPass, each secret is seeded by qubits measured on an IBM quantum computer, health-tested, mixed with the system RNG — and comes with a receipt signed by **ML-DSA**, NIST's lattice-based post-quantum standard. The receipt proves origin **without containing the secret**. Sam hands the auditor a link.
+> With QuantumPass, each secret is seeded by qubits measured on an IBM quantum computer, health-tested, mixed with the system RNG — and comes with a receipt signed by **ML-DSA**, NIST's lattice-based post-quantum standard. The receipt authenticates the server's claims **without containing the secret**; it does not independently authenticate hardware origin. Sam hands the auditor a link.
 
 <img src="docs/screenshots/hero-dark.png" alt="QuantumPass landing page" width="900" />
 
@@ -51,7 +51,7 @@ QuantumPass is a small, production-hardened answer to both.
 | | |
 |---|---|
 | **Problem** | Secrets come from invisible random generators nobody can audit. Weak RNGs have cost hundreds of millions (Wintermute ≈ $160M, "Milk Sad"). The signatures protecting everything will fall to quantum computers. |
-| **Solution** | Real quantum entropy from **IBM Quantum QPUs**, the **ANU** vacuum-fluctuation QRNG and the **LfD** photonic QRNG — continuously health-tested (NIST SP 800-90B) and always mixed with the OS CSPRNG, so output is never weaker than standard practice. |
+| **Solution** | Real quantum entropy from **IBM Quantum QPUs**, the **ANU** vacuum-fluctuation QRNG and the **LfD** photonic QRNG — subjected to SP 800-90B-inspired RCT/APT screening (not NIST-certified) and always mixed with the OS CSPRNG, under the stated cryptographic assumptions, preserving the OS CSPRNG baseline. |
 | **What's new** | Every result can carry a **hybrid Ed25519 + ML-DSA-65 signed receipt** naming the exact IBM jobs, the sources, the health result and a **commitment** to the secret instead of the secret. Anyone can verify it — on our page or **offline** with a 50-line script. Draws are **commit-then-run**: entries are locked and signed before any randomness exists. |
 
 <table>
@@ -68,7 +68,7 @@ QuantumPass is a small, production-hardened answer to both.
 ### Honest about what is and isn't new
 
 - Signing quantum randomness with a post-quantum signature has been done in research (e.g. USTC's DI-QRNG beacon), and hybrid Ed25519 + ML-DSA is an IETF composite design. **We do not claim to have invented post-quantum signing.**
-- What we have not found elsewhere is the **combination in a product**: per-result receipts that bind real cloud-QPU job IDs, SP 800-90B health results and a secret commitment under a domain-separated hybrid PQ signature, with a public log, a re-roll-visible commit-then-run draw, and an offline verifier.
+- What we have not found elsewhere is the **combination in a product**: per-result receipts that bind real cloud-QPU job IDs, SP 800-90B-style health screening results and a secret commitment under a domain-separated hybrid PQ signature, with a public log, a re-roll-visible commit-then-run draw, and an offline verifier.
 - The receipt proves what **this server** committed to and signed. It does **not** prove quantum origin against a dishonest operator (IBM doesn't sign job results). It is **not** device-independent or "certified" randomness, and it is **not** a "quantum signature" (those require quantum channels and don't exist as products). See [docs/SECURITY.md](docs/SECURITY.md) for the full limits.
 
 ## Who it's for
@@ -87,9 +87,9 @@ QuantumPass is a small, production-hardened answer to both.
 
 | | Password managers (1Password, Bitwarden…) | random.org signed API / draws | Chainlink VRF | QRNG APIs (ANU, Cisco, Quantinuum Origin) | **QuantumPass** |
 |---|---|---|---|---|---|
-| Strong randomness | ✓ | ✓ | ✓ | ✓ | ✓ never weaker than your OS RNG |
+| Strong randomness | ✓ | ✓ | ✓ | ✓ | ✓ mixed with the OS CSPRNG |
 | Real quantum hardware source | — | — (atmospheric noise) | — | ✓ | ✓ IBM QPU + ANU + LfD, labelled per result |
-| Continuous health tests exposed | — | — | — | some | ✓ SP 800-90B, in the receipt |
+| Continuous health tests exposed | — | — | — | some | ✓ 800-90B-inspired tests, not certified |
 | Per-result provenance (which device, which job) | — | serial numbers | on-chain proof | rarely | ✓ exact IBM job IDs |
 | Post-quantum signed proof | — | — (classical) | — (ECC) | — | ✓ ML-DSA-65 + Ed25519 |
 | Proof without revealing the secret | n/a | — | n/a | — | ✓ commitment + private salt |
@@ -110,7 +110,7 @@ flowchart LR
         ANU["ANU QRNG"]
         LFD["LfD QRNG"]
     end
-    Q --> HT["SP 800-90B health tests<br/>+ circuit breaker"]
+    Q --> HT["800-90B-style screening<br/>+ circuit breaker"]
     HT --> MIX["HKDF-SHA512 mix"]
     OS["OS CSPRNG<br/>(always)"] --> MIX
     MIX --> GEN["Rejection sampling<br/>(zero bias)"]
@@ -134,7 +134,7 @@ flowchart LR
     "provenance": {
       "sources": ["ibm_quantum", "lfd"], "quantum": true, "quantum_bytes": 128,
       "ibm_jobs": [{ "backend": "ibm_brisbane", "job_id": "d0…", "mode": "hardware" }],
-      "health": { "sp800_90b": "pass" }
+      "health": { "sp800_90b_style": "pass" }
     },
     "entropy_bits": 129.4,
     "commitment": "sha512(salt ‖ password) — the salt goes only to you",
@@ -183,7 +183,7 @@ Built security-first and then **adversarially audited** (6 specialist reviewers,
 |---|---|
 | Secrets | Never stored, logged, cached or sent to the AI; receipts hold commitments only; `no-store` on every API response |
 | Crypto | Hybrid Ed25519 + ML-DSA-65 (FIPS 204) with domain separation; HKDF/HMAC-SHA512; keyring with rotation and revocation; keys in 0600 files or secret env |
-| Entropy supply | SP 800-90B RCT + APT per byte; batched, throttled upstream calls; hour-long back-off on quota/auth refusals; IBM pool reserved for signed-in users with daily quotas |
+| Entropy supply | 800-90B-style RCT + APT screening, not certified; batched, throttled upstream calls; hour-long back-off on quota/auth refusals; IBM pool reserved for signed-in users with daily quotas |
 | Abuse | Global per-IP limit before any work; body-size limit; per-route and per-user limits; IPv6 /64 buckets; only the proxy's fixed address is trusted for client IPs |
 | Draw integrity | Commit-then-run, once-only execution, canonical fingerprints, public sibling counts, 50 draws/user/day, retention for anonymous receipts |
 | AI cost & safety | Atomic admit-and-reserve, one stream per user, settlement shielded from disconnects, USD caps per user/day/month, token/tool/secret caps — see [docs/AI_SAFETY.md](docs/AI_SAFETY.md) |
@@ -286,7 +286,7 @@ Not by guessing. A 20-character password here has ≈ 129 bits of entropy; at 10
 It is built on real quantum sources: IBM QPUs (job IDs recorded per receipt), ANU and LfD. In this sandbox we could only run the IBM *simulator*, and the app says so on every result. Connect your IBM key and the badge changes to "Quantum" with the real backend and job ID.
 
 **Is it "unhackable"?**
-No system is, and we don't say it. What we claim: strong randomness that is never weaker than your OS, verifiable provenance, post-quantum signed receipts, and an audited, hardened service. The limits are written down in [docs/SECURITY.md](docs/SECURITY.md).
+No system is, and we don't say it. What we claim: strong randomness mixed with the OS CSPRNG under documented assumptions, verifiable provenance, post-quantum signed receipts, and an audited, hardened service. The limits are written down in [docs/SECURITY.md](docs/SECURITY.md).
 
 **Is this a "quantum signature"? Lattice crypto?**
 It is a **post-quantum** signature: ML-DSA-65 is lattice-based (Module-Lattice DSA, FIPS 204), combined with Ed25519. True quantum signatures need quantum channels and don't exist as products.
