@@ -22,8 +22,12 @@ from .config import Settings, get_settings
 from .entropy import EntropyService
 from .ratelimit import limiter
 from .receipts import Keyring, Signer
-from .security import (BodySizeLimitMiddleware, RequestAuditLoggingMiddleware,
-                       SecurityHeadersMiddleware, install_log_redaction)
+from .security import (
+    BodySizeLimitMiddleware,
+    RequestAuditLoggingMiddleware,
+    SecurityHeadersMiddleware,
+    install_log_redaction,
+)
 
 
 def create_app(settings: Settings | None = None, entropy: EntropyService | None = None,
