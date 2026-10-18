@@ -142,7 +142,10 @@ class Keyring:
 
 def receipt_schema_valid(payload: object) -> bool:
     """Strict signed-payload schema check. Keep legacy qpg-receipt/1 verifiable."""
-    if not isinstance(payload, dict) or payload.get("version") not in SUPPORTED_VERSIONS:
+    if not isinstance(payload, dict):
+        return False
+    version = payload.get("version")
+    if not isinstance(version, str) or version not in SUPPORTED_VERSIONS:
         return False
     base = {"version", "receipt_id", "issued_at", "kind", "key_id",
             "provenance", "entropy_bits", "commitment", "result", "details"}
@@ -156,7 +159,7 @@ def receipt_schema_valid(payload: object) -> bool:
     issued_at = payload["issued_at"]
     if type(issued_at) is not int or issued_at <= 0 or issued_at > time.time() + 300:
         return False
-    if payload["kind"] not in SUPPORTED_KINDS:
+    if not isinstance(payload["kind"], str) or payload["kind"] not in SUPPORTED_KINDS:
         return False
     provenance = payload["provenance"]
     if not isinstance(provenance, dict):
@@ -205,7 +208,9 @@ def verify_signatures(payload: dict, signatures: dict, public_keys: dict) -> dic
 
 def verify_receipt(payload: dict, signatures: dict, keyring: Keyring) -> dict:
     """Full check: known key, both signatures, and not issued after the key's revocation."""
-    version_supported = isinstance(payload, dict) and payload.get("version") in SUPPORTED_VERSIONS
+    version_supported = (isinstance(payload, dict) and
+                         isinstance(payload.get("version"), str) and
+                         payload["version"] in SUPPORTED_VERSIONS)
     schema_valid = receipt_schema_valid(payload)
     invalid = {"ed25519": False, "ml-dsa-65": False}
     if not schema_valid:
