@@ -346,3 +346,21 @@ def test_idempotency_requires_safe_token_characters(client):
     payload = {"title": "Check", "entries": ["a", "b"], "winners": 1}
     assert client.post("/api/v2/draws", json=payload,
                        headers={"Idempotency-Key": "a"}).status_code == 422
+
+
+def test_browser_verification_material_preserves_python_canonical_numbers(client):
+    from app.receipts import SIGNING_DOMAIN, canonical
+
+    generated = client.get("/api/v2/random", params={"bytes": 32, "receipt": True}).json()
+    receipt = generated["receipt"]
+    receipt_id = receipt["payload"]["receipt_id"]
+    response = client.get(f"/api/v2/receipts/{receipt_id}/verify-material")
+    assert response.status_code == 200
+    material = response.json()
+    assert material["canonical_payload"] == canonical(receipt["payload"]).decode()
+    assert material["signing_domain"].encode() == SIGNING_DOMAIN
+    assert '"entropy_bits":256.0' in material["canonical_payload"]
+    from app.receipts import verify_signatures
+
+    assert all(verify_signatures(receipt["payload"], receipt["signatures"], material["public_key"]).values())
+    assert "not-independent-attestation" in material["trust"]
