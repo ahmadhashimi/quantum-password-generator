@@ -72,6 +72,27 @@ class Draw(SQLModel, table=True):
     run_delay_s: int | None = None  # seconds between commit and run, shown to verifiers
     created_at: datetime = Field(default_factory=_now)
 
+class IdempotencyRecord(SQLModel, table=True):
+    """Exact response replay for a caller-scoped mutation."""
+    __tablename__ = "idempotency_records"
+    id: str = Field(primary_key=True)  # hash of caller, route and client token
+    request_hash: str
+    response_json: str
+    created_at: datetime = Field(default_factory=_now)
+
+
+def get_idempotent_response(record_id: str, request_hash: str) -> dict | None:
+    with Session(engine()) as session:
+        row = session.get(IdempotencyRecord, record_id)
+        if row is None:
+            return None
+        if row.request_hash != request_hash:
+            raise ValueError("Idempotency key already used with a different request")
+        return json.loads(row.response_json)
+
+
+
+
 class AuditHead(SQLModel, table=True):
     """Serialization point: row-locked when appending to the audit hash chain."""
     __tablename__ = "audit_head"
@@ -292,7 +313,8 @@ def get_draw(draw_id: str) -> "Draw | None":
         return s.get(Draw, draw_id)
 
 
-def commit_draw_tx(draw: "Draw", receipt: dict, owner_id: str | None) -> None:
+def commit_draw_tx(draw: "Draw", receipt: dict, owner_id: str | None,
+                   idempotency: tuple[str, str, dict] | None = None) -> None:
     """A draw must never exist without its signed commitment (or vice versa)."""
     payload = receipt["payload"]
     with Session(engine()) as session:
@@ -302,6 +324,10 @@ def commit_draw_tx(draw: "Draw", receipt: dict, owner_id: str | None) -> None:
                             signatures=json.dumps(receipt["signatures"])))
         append_audit(session, actor=owner_id or "anonymous", action="draw.commit",
                      target=draw.id, details={"entries_hash": draw.entries_sha256})
+        if idempotency is not None:
+            record_id, request_hash, response = idempotency
+            session.add(IdempotencyRecord(id=record_id, request_hash=request_hash,
+                                          response_json=json.dumps(response, sort_keys=True)))
         session.commit()
 
 
@@ -327,7 +353,8 @@ def claim_draw_seeded(draw_id: str, owner_id: str | None, seed: bytes, provenanc
         return session.get(Draw, draw_id)
 
 
-def finish_draw_tx(draw_id: str, owner_id: str | None, receipt: dict) -> None:
+def finish_draw_tx(draw_id: str, owner_id: str | None, receipt: dict,
+                   idempotency: tuple[str, str, dict] | None = None) -> None:
     """Receipt and winner state are committed or rolled back together."""
     with Session(engine()) as session:
         draw = session.get(Draw, draw_id)
@@ -345,6 +372,10 @@ def finish_draw_tx(draw_id: str, owner_id: str | None, receipt: dict) -> None:
         session.add(draw)
         append_audit(session, actor=owner_id or "anonymous", action="draw.finish",
                      target=draw_id, details={"receipt_id": payload["receipt_id"]})
+        if idempotency is not None:
+            record_id, request_hash, response = idempotency
+            session.add(IdempotencyRecord(id=record_id, request_hash=request_hash,
+                                          response_json=json.dumps(response, sort_keys=True)))
         session.commit()
 
 
