@@ -44,8 +44,8 @@ class Provenance:
             "quantum_bytes": self.quantum_bytes,
             "mixed_with": "os_csprng",
             "failures": self.failures,
-            # Every contributing source passed SP 800-90B RCT + APT; failing sources are excluded above.
-            "health": {"sp800_90b": "pass" if self.sources != ["os_csprng"] else "n/a"},
+            # Every contributing external source passed our SP 800-90B-inspired RCT/APT checks; no NIST validation is claimed.
+            "health": {"sp800_90b_style": "pass" if self.sources != ["os_csprng"] else "n/a"},
             "timestamp": self.timestamp,
         }
         if self.ibm_jobs:
