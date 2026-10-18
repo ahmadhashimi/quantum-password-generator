@@ -232,3 +232,18 @@ def test_one_stream_per_user_at_a_time():
     db.init_db()
     first, second, other = asyncio.run(scenario())
     assert first[0] is not None and second[0] is None and "wait" in second[1] and other[0] is not None
+
+
+def test_haiku_request_has_no_unsupported_server_side_fallback():
+    api = FakeAPI((200, msg([{"type": "text", "text": "Hi"}], "end_turn")))
+    entropy = EntropyService([FakeProvider("lfd")])
+    http = httpx2.AsyncClient(transport=httpx2.MockTransport(api))
+    assistant = Assistant(AsyncAnthropic(api_key="test", max_retries=0, http_client=http),
+                          "claude-haiku-5-5", entropy)
+    with TestClient(create_app(settings=get_settings(), entropy=entropy, assistant=assistant)) as c:
+        result = c.post("/api/v2/assistant/chat", json={"message": "hi"})
+    assert result.status_code == 200
+    request = api.requests[0]
+    assert request["model"] == "claude-haiku-5-5"
+    assert request["output_config"]["effort"] == "low"
+    assert "fallbacks" not in request
