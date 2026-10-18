@@ -1,5 +1,7 @@
 """User + usage tracking. Stores metadata only — never passwords, passphrases, or chat contents."""
 
+import hashlib
+import json
 from datetime import UTC, datetime
 
 from sqlmodel import Field, Session, SQLModel, create_engine, func, select
@@ -61,11 +63,92 @@ class Draw(SQLModel, table=True):
     entries_sha256: str = Field(index=True)
     entries_count: int
     winners: int
-    status: str = Field(default="committed", index=True)  # committed -> running -> done
+    status: str = Field(default="committed", index=True)  # committed -> seeded -> done / needs_investigation
+    seed_hex: str | None = None  # public verification seed, never a credential or signing key
+    seed_provenance: str | None = None  # JSON; exactly the entropy stream used for this seed
+    run_started_at: datetime | None = None
     commit_receipt_id: str
     result_receipt_id: str | None = None
     run_delay_s: int | None = None  # seconds between commit and run, shown to verifiers
     created_at: datetime = Field(default_factory=_now)
+
+class IdempotencyRecord(SQLModel, table=True):
+    """Exact response replay for a caller-scoped mutation."""
+    __tablename__ = "idempotency_records"
+    id: str = Field(primary_key=True)  # hash of caller, route and client token
+    request_hash: str
+    response_json: str
+    created_at: datetime = Field(default_factory=_now)
+
+
+def get_idempotent_response(record_id: str, request_hash: str) -> dict | None:
+    with Session(engine()) as session:
+        row = session.get(IdempotencyRecord, record_id)
+        if row is None:
+            return None
+        if row.request_hash != request_hash:
+            raise ValueError("Idempotency key already used with a different request")
+        return json.loads(row.response_json)
+
+
+
+
+class AuditHead(SQLModel, table=True):
+    """Serialization point: row-locked when appending to the audit hash chain."""
+    __tablename__ = "audit_head"
+    id: int = Field(default=1, primary_key=True)
+    last_hash: str = "0" * 64
+
+
+class AuditEvent(SQLModel, table=True):
+    """Tamper-evident chain, not tamper-proof against a DB administrator."""
+    __tablename__ = "audit_events"
+    id: int | None = Field(default=None, primary_key=True)
+    timestamp: datetime = Field(default_factory=_now)
+    actor: str
+    action: str
+    target: str
+    details: str = "{}"
+    previous_hash: str
+    hash: str
+
+
+def append_audit(session: Session, *, actor: str, action: str, target: str, details: dict | None = None) -> None:
+    """Call *inside the same transaction* as the audited action."""
+    head = session.exec(select(AuditHead).where(AuditHead.id == 1).with_for_update()).first()
+    if head is None:
+        # init_db seeds this row before requests begin.
+        raise RuntimeError("audit head is missing")
+    prior = head.last_hash
+    timestamp = _now()
+    detail_json = json.dumps(details or {}, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    body = json.dumps({"ts": timestamp.replace(tzinfo=None).isoformat(), "actor": actor,
+                       "action": action, "target": target, "details": json.loads(detail_json)},
+                      sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    digest = hashlib.sha256((prior + body).encode("utf-8")).hexdigest()
+    session.add(AuditEvent(timestamp=timestamp, actor=actor, action=action, target=target,
+                           details=detail_json, previous_hash=prior, hash=digest))
+    head.last_hash = digest
+    session.add(head)
+
+
+def verify_audit_chain() -> dict:
+    """Detect missing/modified events; anchor published checkpoints externally in V3."""
+    previous = "0" * 64
+    with Session(engine()) as session:
+        rows = session.exec(select(AuditEvent).order_by(AuditEvent.id)).all()
+        for event in rows:
+            body = json.dumps({"ts": event.timestamp.replace(tzinfo=None).isoformat(),
+                               "actor": event.actor, "action": event.action, "target": event.target,
+                               "details": json.loads(event.details)}, sort_keys=True,
+                              separators=(",", ":"), ensure_ascii=False)
+            expected = hashlib.sha256((previous + body).encode("utf-8")).hexdigest()
+            if event.previous_hash != previous or event.hash != expected:
+                return {"valid": False, "first_broken_event_id": event.id}
+            previous = event.hash
+        head = session.get(AuditHead, 1)
+        return {"valid": bool(head and head.last_hash == previous), "events": len(rows),
+                "last_hash": previous}
 
 
 _engine = None
@@ -81,11 +164,18 @@ def engine():
 
 
 def init_db() -> None:
+    # Production will replace create_all with Alembic migrations; keep local/test bootstrap deterministic.
     SQLModel.metadata.create_all(engine())
+    with Session(engine()) as session:
+        if session.get(AuditHead, 1) is None:
+            session.add(AuditHead(id=1))
+            session.commit()
 
 
 def reset_engine() -> None:
     global _engine
+    if _engine is not None:
+        _engine.dispose()
     _engine = None
 
 
@@ -223,25 +313,89 @@ def get_draw(draw_id: str) -> "Draw | None":
         return s.get(Draw, draw_id)
 
 
-def claim_draw(draw_id: str, owner_id: str | None) -> "Draw | None":
-    """Atomically move a committed draw to running. Returns None if it doesn't exist, isn't owned, or already ran."""
+def commit_draw_tx(draw: "Draw", receipt: dict, owner_id: str | None,
+                   idempotency: tuple[str, str, dict] | None = None) -> None:
+    """A draw must never exist without its signed commitment (or vice versa)."""
+    payload = receipt["payload"]
+    with Session(engine()) as session:
+        session.add(draw)
+        session.add(Receipt(id=payload["receipt_id"], kind=payload["kind"], user_id=owner_id,
+                            payload=json.dumps(payload, sort_keys=True, ensure_ascii=False),
+                            signatures=json.dumps(receipt["signatures"])))
+        append_audit(session, actor=owner_id or "anonymous", action="draw.commit",
+                     target=draw.id, details={"entries_hash": draw.entries_sha256})
+        if idempotency is not None:
+            record_id, request_hash, response = idempotency
+            session.add(IdempotencyRecord(id=record_id, request_hash=request_hash,
+                                          response_json=json.dumps(response, sort_keys=True)))
+        session.commit()
+
+
+def claim_draw_seeded(draw_id: str, owner_id: str | None, seed: bytes, provenance: dict) -> "Draw | None":
+    """Persist selection seed before calculating winners, atomically claiming once-only execution."""
     from sqlalchemy import update
 
-    with Session(engine()) as s:
-        res = s.exec(update(Draw).where(Draw.id == draw_id, Draw.status == "committed", Draw.owner_id == owner_id)
-                     .values(status="running"))
-        s.commit()
-        return s.get(Draw, draw_id) if res.rowcount == 1 else None
+    if len(seed) != 64:
+        raise ValueError("Draw seed must contain exactly 64 bytes")
+    with Session(engine()) as session:
+        updated = session.exec(
+            update(Draw).where(Draw.id == draw_id, Draw.status == "committed",
+                               Draw.owner_id == owner_id)
+            .values(status="seeded", seed_hex=seed.hex(),
+                    seed_provenance=json.dumps(provenance, sort_keys=True),
+                    run_started_at=_now()))
+        if updated.rowcount != 1:
+            session.rollback()
+            return None
+        append_audit(session, actor=owner_id or "anonymous", action="draw.seeded",
+                     target=draw_id, details={"seed_sha256": hashlib.sha256(seed).hexdigest()})
+        session.commit()
+        return session.get(Draw, draw_id)
 
 
-def finish_draw(draw_id: str, result_receipt_id: str) -> None:
-    with Session(engine()) as s:
-        d = s.get(Draw, draw_id)
-        d.status, d.result_receipt_id, d.entries_json = "done", result_receipt_id, None
-        created = d.created_at if d.created_at.tzinfo else d.created_at.replace(tzinfo=UTC)
-        d.run_delay_s = int((_now() - created).total_seconds())
-        s.add(d)
-        s.commit()
+def finish_draw_tx(draw_id: str, owner_id: str | None, receipt: dict,
+                   idempotency: tuple[str, str, dict] | None = None) -> None:
+    """Receipt and winner state are committed or rolled back together."""
+    with Session(engine()) as session:
+        draw = session.get(Draw, draw_id)
+        if draw is None or draw.owner_id != owner_id or draw.status not in ("seeded", "needs_investigation"):
+            raise ValueError("Draw is not eligible for completion")
+        payload = receipt["payload"]
+        if (payload.get("details") or {}).get("draw_id") != draw_id:
+            raise ValueError("Result receipt references a different draw")
+        session.add(Receipt(id=payload["receipt_id"], kind=payload["kind"], user_id=owner_id,
+                            payload=json.dumps(payload, sort_keys=True, ensure_ascii=False),
+                            signatures=json.dumps(receipt["signatures"])))
+        draw.status, draw.result_receipt_id, draw.entries_json = "done", payload["receipt_id"], None
+        created = draw.created_at if draw.created_at.tzinfo else draw.created_at.replace(tzinfo=UTC)
+        draw.run_delay_s = int((_now() - created).total_seconds())
+        session.add(draw)
+        append_audit(session, actor=owner_id or "anonymous", action="draw.finish",
+                     target=draw_id, details={"receipt_id": payload["receipt_id"]})
+        if idempotency is not None:
+            record_id, request_hash, response = idempotency
+            session.add(IdempotencyRecord(id=record_id, request_hash=request_hash,
+                                          response_json=json.dumps(response, sort_keys=True)))
+        session.commit()
+
+
+def mark_interrupted_draws() -> int:
+    """Recovery fails closed: never select a new seed after an interrupted execution."""
+    with Session(engine()) as session:
+        stale = session.exec(select(Draw).where(Draw.status == "seeded")).all()
+        for draw in stale:
+            draw.status = "needs_investigation"
+            session.add(draw)
+            append_audit(session, actor="system", action="draw.needs_investigation",
+                         target=draw.id, details={})
+        session.commit()
+        return len(stale)
+
+
+def list_interrupted_draws() -> list[dict]:
+    with Session(engine()) as session:
+        return [{"id": d.id, "owner_id": d.owner_id, "created_at": d.created_at.isoformat()}
+                for d in session.exec(select(Draw).where(Draw.status == "needs_investigation")).all()]
 
 
 def sibling_draws(owner_id: str | None, entries_sha256: str, any_owner: bool = False) -> int:
@@ -276,3 +430,11 @@ def draw_for_receipt(receipt_id: str) -> "Draw | None":
     with Session(engine()) as s:
         return s.exec(select(Draw).where((Draw.commit_receipt_id == receipt_id) |
                                          (Draw.result_receipt_id == receipt_id))).first()
+
+def audit_events_recent(limit: int = 100) -> list[dict]:
+    """Admin-only query. Never put plaintext credentials in audit details."""
+    with Session(engine()) as session:
+        rows = session.exec(select(AuditEvent).order_by(AuditEvent.id.desc()).limit(min(limit, 100))).all()
+        return [{"id": e.id, "timestamp": e.timestamp.isoformat(), "actor": e.actor,
+                 "action": e.action, "target": e.target, "details": json.loads(e.details),
+                 "hash": e.hash, "previous_hash": e.previous_hash} for e in rows]

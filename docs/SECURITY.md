@@ -11,7 +11,7 @@ This document describes the threat model, the controls in place, what an indepen
 | Generated secrets (passwords, passphrases, bytes) | Never stored, logged, cached or shown to the AI model. Delivered once, over TLS, with `Cache-Control: no-store`. |
 | Receipt signing keys | Owner-only key file (0600, atomically created) or secret env var; public keys published; rotation and revocation supported. |
 | Draw integrity | Entries are committed and signed **before** any randomness exists; each draw runs exactly once; all draws over the same entry list are counted publicly. |
-| Quantum entropy supply | Health-tested (SP 800-90B), rate-limited, quota-protected, and never trusted alone (always mixed with the OS CSPRNG). |
+| Quantum entropy supply | Screened using SP 800-90B-inspired RCT/APT tests (not validated or certified), rate-limited, quota-protected, and never trusted alone (always mixed with the OS CSPRNG). |
 | Users' accounts | Clerk session JWTs verified server-side (signature, expiry, authorized party). Admin requires a recently verified second factor. |
 | Money | Hard USD caps on AI spend (per user, per day, per month) that are reserved **before** a model call and settled even if the client disconnects. |
 
@@ -57,7 +57,7 @@ yet.
 ## Cryptography
 
 - **Entropy:** `seed = HKDF-SHA512(quantum_bytes ‖ os.urandom(64))`, expanded with HMAC-SHA512 in counter mode.
-  Output is never weaker than the OS CSPRNG; quantum bytes can only add entropy.
+  Assuming a secure OS CSPRNG and correct HKDF/HMAC implementation, untrusted external input should not reduce the OS security baseline. This is not a guarantee against compromised hosts or implementation flaws.
 - **Sampling:** rejection sampling (no modulo bias); exact entropy via inclusion–exclusion.
 - **Receipts:** canonical JSON (sorted keys, no whitespace) → `SIGNING_DOMAIN ‖ json` → Ed25519 **and** ML-DSA-65
   (FIPS 204, lattice-based). Both must verify. `key_id = SHA-256(ed25519_pk ‖ mldsa_pk)[:16]`.
@@ -68,7 +68,7 @@ yet.
 ## Limits we state plainly
 
 - A quantum entropy source does **not** make a password stronger than a correctly used OS CSPRNG. What it adds is
-  **provenance you can verify**. We never claim "unhackable" or "quantum-safe passwords".
+  **server-signed provenance statements you can inspect**. We never claim "unhackable" or "quantum-safe passwords".
 - The receipt proves *what this server committed to and signed*, including the IBM job it says it used. It does
   **not** prove quantum origin against a dishonest operator: IBM does not sign job results, and third parties
   cannot fetch someone else's job. This is not device-independent or "certified" randomness.

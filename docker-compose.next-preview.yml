@@ -1,0 +1,87 @@
+# Non-production preview. Does not replace production Compose or migrate existing SQLite records.
+# Dedicated Postgres volume; migrations and restore rehearsal are required before release.
+services:
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    env_file: backend/.env
+    environment:
+      ENVIRONMENT: production
+      ALLOWED_HOSTS: '["${DOMAIN}", "localhost"]'
+      ALLOWED_ORIGINS: '["https://${DOMAIN}"]'
+      CLERK_HOSTS: '["https://clerk.${DOMAIN}"]'
+      DATABASE_URL: postgresql+psycopg://quantumpass:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/quantumpass
+      POOL_PATH: /data/entropy_pool.bin
+      SIGNING_KEY_PATH: /data/signing_keys.json
+      FORWARDED_ALLOW_IPS: 10.89.0.2
+    volumes: [api-data:/data]
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    expose: ["8000"]
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      internal:
+        ipv4_address: 10.89.0.3
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: quantumpass
+      POSTGRES_USER: quantumpass
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    volumes: [postgres-data:/var/lib/postgresql/data]
+    expose: ["5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U quantumpass -d quantumpass"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    networks: [internal]
+  web:
+    build:
+      context: ./web
+      args:
+        NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:-}
+    environment:
+      API_INTERNAL_ORIGIN: http://api:8000
+      CLERK_SECRET_KEY: ${CLERK_SECRET_KEY:-}
+      NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:-}
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    expose: ["3000"]
+    restart: unless-stopped
+    networks: [internal]
+    depends_on: [api]
+  caddy:
+    image: caddy:2.10-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN}
+    ports: ["80:80", "443:443", "443:443/udp"]
+    volumes:
+      - ./deploy/Caddyfile.next:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on: [web, api]
+    restart: unless-stopped
+    networks:
+      internal:
+        ipv4_address: 10.89.0.2
+networks:
+  internal:
+    ipam:
+      config:
+        - subnet: 10.89.0.0/29
+volumes:
+  postgres-data:
+  api-data:
+  caddy-data:
+  caddy-config:

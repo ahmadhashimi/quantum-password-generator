@@ -242,3 +242,125 @@ def test_signatures_are_domain_separated():
     pub = Ed25519PublicKey.from_public_bytes(unb64(s.public_keys()["ed25519"]))
     with pytest.raises(InvalidSignature):
         pub.verify(unb64(receipt["signatures"]["ed25519"]), canonical(receipt["payload"]))
+
+
+def test_public_selection_seed_reproduces_winners(client):
+    from app.entropy.mixer import KeyStream
+    from app.generator import draw_winners
+    entries = ["c", "a", "b", "d", "e"]
+    _, result = commit_and_run(client, entries, winners=2)
+    receipt = result["receipt"]["payload"]
+    seed = bytes.fromhex(receipt["details"]["selection"]["seed_hex"])
+    assert len(seed) == 64
+    expected = draw_winners(KeyStream(seed), sorted(entries), 2)
+    assert [w["index"] for w in result["winners"]] == expected
+    verification = client.post("/api/v2/receipts/verify", json={
+        "receipt_id": receipt["receipt_id"], "entries": entries}).json()
+    assert verification["valid"] is True
+    assert verification["entries_match"] is True
+    assert verification["selection_matches"] is True
+
+
+def test_atomic_draw_commit_rolls_back_with_audit_error(monkeypatch, client):
+    from app import db
+    from app.receipts import build_receipt
+    signer = Signer.generate()
+    receipt, _ = build_receipt(signer, "draw_commit",
+                               {"sources": [], "quantum": False, "quantum_bytes": 0,
+                                "mixed_with": "none"})
+    draw = db.Draw(id="draw_atomic", title="atomic", entries_json='["a"]', entries_sha256="h",
+                   entries_count=1, winners=1, commit_receipt_id=receipt["payload"]["receipt_id"])
+    def fail(*args, **kwargs):
+        raise RuntimeError("injected audit failure")
+    monkeypatch.setattr(db, "append_audit", fail)
+    with pytest.raises(RuntimeError, match="injected"):
+        db.commit_draw_tx(draw, receipt, None)
+    assert db.get_draw(draw.id) is None
+    assert db.get_receipt(receipt["payload"]["receipt_id"]) is None
+
+
+def test_interrupted_draw_reuses_persisted_seed(client):
+    from app import db
+    from app.api.receipts import _calculate_result
+    entries = ["alice", "bob", "carol"]
+    commit = client.post("/api/v2/draws", json={"title": "Recover", "entries": entries, "winners": 1}).json()
+    draw_id = commit["draw_id"]
+    seed = bytes(range(64))
+    owner = db.get_draw(draw_id).owner_id
+    claimed = db.claim_draw_seeded(draw_id, owner, seed, PROV)
+    assert claimed and claimed.seed_hex == seed.hex()
+    assert db.mark_interrupted_draws() == 1
+    assert db.get_draw(draw_id).status == "needs_investigation"
+    signer = client.app.state.signer
+    receipt, winners = _calculate_result(db.get_draw(draw_id), signer)
+    receipt_again, winners_again = _calculate_result(db.get_draw(draw_id), signer)
+    assert winners == winners_again
+    assert receipt["payload"]["details"]["selection"] == receipt_again["payload"]["details"]["selection"]
+    db.finish_draw_tx(draw_id, owner, receipt)
+    assert db.get_draw(draw_id).status == "done"
+    assert db.get_receipt(receipt["payload"]["receipt_id"]) is not None
+    assert client.post(f"/api/v2/draws/{draw_id}/run").status_code == 409
+    assert db.verify_audit_chain()["valid"] is True
+
+
+def test_audit_chain_detects_field_tampering(client):
+    from sqlmodel import Session
+
+    from app import db
+    commit_and_run(client, ["one", "two"], winners=1)
+    assert db.verify_audit_chain()["valid"] is True
+    with Session(db.engine()) as session:
+        first = session.get(db.AuditEvent, 1)
+        first.action = "draw.unlogged_mutation"
+        session.add(first)
+        session.commit()
+    assert db.verify_audit_chain()["valid"] is False
+
+
+def test_commit_idempotency_replays_exact_receipt_and_rejects_request_mutation(client):
+    h = {"Idempotency-Key": "same-create-request-123"}
+    payload = {"title": "One list", "entries": ["a", "b", "c"], "winners": 1}
+    first = client.post("/api/v2/draws", json=payload, headers=h)
+    second = client.post("/api/v2/draws", json=payload, headers=h)
+    assert first.status_code == 200 and second.status_code == 200
+    assert second.json() == first.json()
+    mutated = client.post("/api/v2/draws", json={**payload, "title": "Other"}, headers=h)
+    assert mutated.status_code == 422
+    from app import db
+    assert db.draws_today(db.get_draw(first.json()["draw_id"]).owner_id) == 1
+
+
+def test_run_idempotency_replays_winners_and_never_reseeds(client):
+    creation = client.post("/api/v2/draws", json={
+        "title": "RunOnce", "entries": ["a", "b", "c"], "winners": 1}).json()
+    url = f"/api/v2/draws/{creation['draw_id']}/run"
+    h = {"Idempotency-Key": "same-run-request-456"}
+    first = client.post(url, headers=h)
+    assert first.status_code == 200
+    second = client.post(url, headers=h)
+    assert second.status_code == 200 and second.json() == first.json()
+    assert client.post(url).status_code == 409
+
+
+def test_idempotency_requires_safe_token_characters(client):
+    payload = {"title": "Check", "entries": ["a", "b"], "winners": 1}
+    assert client.post("/api/v2/draws", json=payload,
+                       headers={"Idempotency-Key": "a"}).status_code == 422
+
+
+def test_browser_verification_material_preserves_python_canonical_numbers(client):
+    from app.receipts import SIGNING_DOMAIN, canonical
+
+    generated = client.get("/api/v2/random", params={"bytes": 32, "receipt": True}).json()
+    receipt = generated["receipt"]
+    receipt_id = receipt["payload"]["receipt_id"]
+    response = client.get(f"/api/v2/receipts/{receipt_id}/verify-material")
+    assert response.status_code == 200
+    material = response.json()
+    assert material["canonical_payload"] == canonical(receipt["payload"]).decode()
+    assert material["signing_domain"].encode() == SIGNING_DOMAIN
+    assert '"entropy_bits":256.0' in material["canonical_payload"]
+    from app.receipts import verify_signatures
+
+    assert all(verify_signatures(receipt["payload"], receipt["signatures"], material["public_key"]).values())
+    assert "not-independent-attestation" in material["trust"]

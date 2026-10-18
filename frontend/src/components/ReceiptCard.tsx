@@ -19,7 +19,7 @@ export function ReceiptCard({ receipt, salt }: Props) {
         <code className="font-mono text-xs text-slate-500">{id}</code>
       </div>
       <p className="text-xs text-slate-500 dark:text-slate-400">
-        Signed with <strong>Ed25519 + ML-DSA-65</strong> (NIST FIPS 204). Anyone can verify where this randomness came
+        Signed with <strong>Ed25519 + ML-DSA-65</strong> (NIST FIPS 204). Anyone can verify what this service signed about where the randomness came
         from{salt ? " — the receipt holds only a fingerprint of your secret, never the secret itself" : ""}.
       </p>
       <div className="flex flex-wrap gap-2">

@@ -263,3 +263,20 @@ def test_production_csp_drops_clerk_wildcards(monkeypatch):
                                                                          "https://clerk.example.com"])
     csp = content_security_policy(s)
     assert "accounts.dev" not in csp and "https://clerk.example.com" in csp
+
+
+def test_request_logs_never_include_generated_secret_or_query(caplog, client):
+    import json as _json
+
+    with caplog.at_level("INFO", logger="qpg.access"):
+        response = client.get("/api/v2/password", params={"length": 24, "receipt": True,
+                                                            "secret_marker": "NEVER_LOG_THIS"})
+    assert response.status_code == 200
+    assert len(response.headers["x-request-id"]) == 24
+    records = [r.message for r in caplog.records if r.name == "qpg.access"]
+    assert records
+    event = _json.loads(records[-1])
+    assert event["method"] == "GET" and event["status"] == 200
+    assert event["route"] == "/api/v2/password"
+    assert "NEVER_LOG_THIS" not in "".join(records)
+    assert response.json()["password"] not in "".join(records)

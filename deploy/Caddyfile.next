@@ -1,0 +1,18 @@
+# Next.js App Router preview; only Caddy is internet exposed.
+{$DOMAIN} {
+    encode zstd gzip
+    request_body {
+        max_size 1MB
+    }
+    @api path /api/v2/* /quantum-* /.well-known/quantumpass-keys.json
+    reverse_proxy @api api:8000 {
+        flush_interval -1
+        header_up X-Forwarded-For {remote_host}
+    }
+    reverse_proxy web:3000
+    header -Server
+    log {
+        output stdout
+        format json
+    }
+}

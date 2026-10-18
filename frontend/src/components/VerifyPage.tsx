@@ -51,7 +51,7 @@ export function VerifyPage({ receiptId }: { receiptId: string }) {
         <FileSearch className="mx-auto size-10 text-violet-400" aria-hidden />
         <h1 className="text-3xl font-bold tracking-tight">Verify a receipt</h1>
         <p className="text-slate-600 dark:text-slate-400">
-          Check the Ed25519 and post-quantum ML-DSA-65 signatures and see exactly where the randomness came from.
+          Check the two signatures and inspect the entropy sources reported by this service. Hardware provenance is not independently attested.
         </p>
       </div>
 
@@ -77,13 +77,13 @@ export function VerifyPage({ receiptId }: { receiptId: string }) {
         <section className="glass space-y-5 p-6" aria-labelledby="verdict">
           <h2 id="verdict" className={`flex items-center gap-2 text-xl font-semibold ${result.valid ? "text-emerald-500" : "text-rose-500"}`}>
             {result.valid ? <CheckCircle2 className="size-6" aria-hidden /> : <XCircle className="size-6" aria-hidden />}
-            {result.valid ? "Authentic receipt" : "Verification failed"}
+            {result.valid ? "Signed receipt verified" : "Verification failed"}
           </h2>
           <ul className="space-y-1.5 text-sm">
             <Check ok={result.signatures["ed25519"]} label="Ed25519 signature (classical)" />
             <Check ok={result.signatures["ml-dsa-65"]} label="ML-DSA-65 signature (post-quantum, NIST FIPS 204)" />
             <Check ok={result.key_id_matches} label="Signed by this server's published key" />
-            <Check ok={result.in_public_log} label="Recorded in the public receipt log" />
+            <Check ok={result.in_public_log} label="Present in the server-controlled receipt log" />
             <Check ok={result.entries_match} label="Entries list matches the signed fingerprint" />
             {result.draw && (
               <Check ok={result.draw.draws_by_anyone_over_same_entries === 1}

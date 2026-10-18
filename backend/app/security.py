@@ -1,7 +1,10 @@
 """HTTP hardening: security headers, no-store on secrets, log redaction."""
 
+import json
 import logging
 import re
+import secrets
+import time
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -69,6 +72,47 @@ class SecurityHeadersMiddleware:
             await send(message)
 
         await self.app(scope, receive, send_wrapper)
+
+
+class RequestAuditLoggingMiddleware:
+    """Structured request metadata only; no bodies, URLs, query strings or generated secret values."""
+
+    def __init__(self, app: ASGIApp):
+        self.app = app
+        self.logger = logging.getLogger("qpg.access")
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        request_id = secrets.token_hex(12)  # server generated; never trust caller correlation headers
+        start = time.monotonic()
+        status = 500
+
+        async def logged_send(message: Message) -> None:
+            nonlocal status
+            if message["type"] == "http.response.start":
+                status = message["status"]
+                headers = list(message.get("headers", []))
+                headers.append((b"x-request-id", request_id.encode("ascii")))
+                message["headers"] = headers
+            await send(message)
+
+        try:
+            await self.app(scope, receive, logged_send)
+        finally:
+            # Only the path template is safe; path parameters may contain secrets.
+            # The catch-all sentinel prevents accidental logging of arbitrary path values.
+            route = scope.get("route")
+            template = getattr(route, "path", None)
+            record = {
+                "event": "http.request",
+                "request_id": request_id,
+                "method": scope.get("method"),
+                "route": template if isinstance(template, str) else "(unmatched)",
+                "status": status,
+                "duration_ms": round((time.monotonic() - start) * 1000, 2),
+            }
+            self.logger.info(json.dumps(record, separators=(",", ":"), sort_keys=True))
 
 
 _SECRET_RE = re.compile(r'("?(password|passphrase|value|quantum_password)"?\s*[:=]\s*)"[^"]*"', re.I)

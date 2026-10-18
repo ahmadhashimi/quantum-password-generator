@@ -15,13 +15,15 @@ import secrets
 import unicodedata
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
+from sqlalchemy.exc import IntegrityError
 from starlette.concurrency import run_in_threadpool
 
 from .. import db
-from ..auth import CurrentUser, optional_user
+from ..auth import CurrentUser, optional_user, require_admin
 from ..config import Settings, get_settings
+from ..entropy.mixer import KeyStream
 from ..generator import draw_winners
 from ..ratelimit import DRAWS_PER_USER_PER_DAY, general_limit, limiter
 from ..receipts import build_receipt, check_commitment, verify_receipt
@@ -74,6 +76,23 @@ async def signing_keys(request: Request):
     return {"algorithms": ["ed25519", "ml-dsa-65"], "keys": get_keyring(request).public()}
 
 
+@router.get("/api/v2/receipts/{receipt_id}/verify-material")
+@limiter.limit(general_limit)
+async def receipt_verify_material(request: Request, receipt_id: str):
+    """Byte-exact verifier input; Python float formatting is not JS JSON.stringify-compatible."""
+    from ..receipts import SIGNING_DOMAIN, canonical
+
+    receipt = await run_in_threadpool(db.get_receipt, receipt_id[:64])
+    if receipt is None:
+        raise HTTPException(404, "Receipt not found")
+    keys = get_keyring(request).get(receipt["payload"].get("key_id"))
+    if keys is None:
+        raise HTTPException(404, "Receipt signing key unavailable")
+    return {"receipt": receipt, "canonical_payload": canonical(receipt["payload"]).decode("utf-8"),
+            "signing_domain": SIGNING_DOMAIN.decode("utf-8"),
+            "public_key": keys, "trust": "server-published-key-not-independent-attestation"}
+
+
 @router.get("/api/v2/receipts/{receipt_id}")
 @limiter.limit(general_limit)
 async def get_receipt(request: Request, receipt_id: str):
@@ -123,9 +142,20 @@ async def verify(request: Request, body: VerifyRequest):
     if body.entries is not None:
         try:
             normalized = normalize_entries(body.entries)
-            result["entries_match"] = (payload.get("details") or {}).get("entries_sha256") == entries_hash(normalized)
-        except ValueError:
+            details = payload.get("details") or {}
+            result["entries_match"] = details.get("entries_sha256") == entries_hash(normalized)
+            if payload.get("kind") == "draw" and check["valid"] and result["entries_match"]:
+                selection = details.get("selection") or {}
+                seed_hex = selection.get("seed_hex")
+                if selection.get("algorithm") == "qpg-select/1" and isinstance(seed_hex, str) and len(seed_hex) == 128:
+                    indexes = draw_winners(KeyStream(bytes.fromhex(seed_hex)), normalized, details["winners"])
+                    result["selection_matches"] = indexes == [w["index"] for w in payload["result"]["winners"]]
+                else:
+                    result["selection_matches"] = False
+        except (ValueError, TypeError, KeyError, AttributeError, IndexError):
             result["entries_match"] = False
+            if payload.get("kind") == "draw":
+                result["selection_matches"] = False
     if payload.get("kind") in ("draw_commit", "draw") and isinstance(rid, str):
         draw = await run_in_threadpool(db.draw_for_receipt, rid)
         if draw:
@@ -171,11 +201,36 @@ def _owner(user: CurrentUser | None, s: Settings) -> str | None:
     return user.id if user else None
 
 
+def _idempotency_info(owner: str | None, endpoint: str, token: str | None,
+                      request_json: dict) -> tuple[str, str] | None:
+    if token is None:
+        return None
+    if not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", token):
+        raise HTTPException(422, "Invalid Idempotency-Key: expected 8-128 URL-safe characters")
+    record_id = hashlib.sha256(json.dumps([owner, endpoint, token], separators=(",", ":")).encode()).hexdigest()
+    request_hash = hashlib.sha256(json.dumps(request_json, sort_keys=True,
+                                             separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
+    return record_id, request_hash
+
+
+async def _replay(info: tuple[str, str] | None) -> dict | None:
+    if info is None:
+        return None
+    try:
+        return await run_in_threadpool(db.get_idempotent_response, *info)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
 @router.post("/api/v2/draws")
 @limiter.limit(general_limit)
 async def commit_draw(request: Request, body: DrawCommit, user: MaybeUser,
-                      s: Annotated[Settings, Depends(get_settings)]):
+                      s: Annotated[Settings, Depends(get_settings)],
+                      idempotency_key: Annotated[str | None, Header()] = None):
     owner = _owner(user, s)
+    idem = _idempotency_info(owner, "POST /api/v2/draws", idempotency_key, body.model_dump())
+    if replay := await _replay(idem):
+        return replay
     if body.winners > len(body.entries):
         raise HTTPException(422, "More winners than entries")
     if await run_in_threadpool(db.draws_today, owner) >= DRAWS_PER_USER_PER_DAY:
@@ -185,34 +240,101 @@ async def commit_draw(request: Request, body: DrawCommit, user: MaybeUser,
                "entries_sha256": entries_hash(body.entries), "winners": body.winners}
     no_randomness = {"sources": [], "quantum": False, "quantum_bytes": 0, "mixed_with": "none"}
     receipt, _ = build_receipt(get_signer(request), "draw_commit", no_randomness, details=details)
-    await run_in_threadpool(db.save_receipt, receipt, owner)
-    await run_in_threadpool(db.create_draw, db.Draw(
-        id=draw_id, owner_id=owner, title=body.title, entries_json=json.dumps(body.entries, ensure_ascii=False),
-        entries_sha256=details["entries_sha256"], entries_count=len(body.entries), winners=body.winners,
-        commit_receipt_id=receipt["payload"]["receipt_id"]))
-    return {"draw_id": draw_id, "commit_receipt": receipt,
-            "commit_url": f"/#/verify/{receipt['payload']['receipt_id']}"}
+    response = {"draw_id": draw_id, "commit_receipt": receipt,
+                "commit_url": f"/#/verify/{receipt['payload']['receipt_id']}"}
+    try:
+        await run_in_threadpool(db.commit_draw_tx, db.Draw(
+            id=draw_id, owner_id=owner, title=body.title, entries_json=json.dumps(body.entries, ensure_ascii=False),
+            entries_sha256=details["entries_sha256"], entries_count=len(body.entries), winners=body.winners,
+            commit_receipt_id=receipt["payload"]["receipt_id"]), receipt, owner,
+            (*idem, response) if idem else None)
+    except IntegrityError:
+        replay = await _replay(idem)
+        if replay is not None:
+            return replay
+        raise
+    return response
+
+
+def _calculate_result(draw: db.Draw, signer) -> tuple[dict, list[dict]]:
+    """Deterministic and auditable: never consumes fresh entropy during recovery."""
+    if not draw.seed_hex or not draw.seed_provenance:
+        raise RuntimeError("Missing persistent draw seed; do not rerun")
+    seed = bytes.fromhex(draw.seed_hex)
+    if len(seed) != 64:
+        raise RuntimeError("Invalid persisted draw seed")
+    entries = json.loads(draw.entries_json or "[]")
+    if entries_hash(entries) != draw.entries_sha256 or len(entries) != draw.entries_count:
+        raise RuntimeError("Persisted draw entries mismatch their commitment")
+    picked = draw_winners(KeyStream(seed), entries, draw.winners)
+    public = {"winners": [{"index": i, "entry": entries[i]} for i in picked]}
+    details = {"draw_id": draw.id, "title": draw.title, "entries_count": draw.entries_count,
+               "entries_sha256": draw.entries_sha256, "winners": draw.winners,
+               "commit_receipt_id": draw.commit_receipt_id,
+               "selection": {"algorithm": "qpg-select/1", "seed_hex": draw.seed_hex}}
+    receipt, _ = build_receipt(signer, "draw", json.loads(draw.seed_provenance),
+                               public_result=public, details=details)
+    return receipt, public["winners"]
+
+
+@router.get("/api/v2/admin/audit")
+@limiter.limit(general_limit)
+async def audit_events(request: Request, user: Annotated[CurrentUser, Depends(require_admin)]):
+    return {"events": await run_in_threadpool(db.audit_events_recent)}
+
+
+@router.get("/api/v2/admin/audit/verify")
+@limiter.limit(general_limit)
+async def audit_integrity(request: Request, user: Annotated[CurrentUser, Depends(require_admin)]):
+    return await run_in_threadpool(db.verify_audit_chain)
+
+
+@router.get("/api/v2/admin/draws/interrupted")
+@limiter.limit(general_limit)
+async def interrupted_draws(request: Request, user: Annotated[CurrentUser, Depends(require_admin)]):
+    return {"draws": await run_in_threadpool(db.list_interrupted_draws)}
+
+
+@router.post("/api/v2/admin/draws/{draw_id}/complete")
+@limiter.limit(general_limit)
+async def complete_interrupted_draw(request: Request, draw_id: str,
+                                    user: Annotated[CurrentUser, Depends(require_admin)]):
+    draw = await run_in_threadpool(db.get_draw, draw_id)
+    if not draw or draw.status != "needs_investigation":
+        raise HTTPException(409, "Draw is not awaiting recovery")
+    try:
+        receipt, winners = _calculate_result(draw, get_signer(request))
+        await run_in_threadpool(db.finish_draw_tx, draw.id, draw.owner_id, receipt)
+    except (RuntimeError, ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(409, "Cannot safely recover this draw; manual investigation required") from exc
+    return {"winners": winners, "receipt": receipt,
+            "verify_url": f"/verify/{receipt['payload']['receipt_id']}"}
 
 
 @router.post("/api/v2/draws/{draw_id}/run")
 @limiter.limit(general_limit)
-async def run_draw(request: Request, draw_id: str, user: MaybeUser, s: Annotated[Settings, Depends(get_settings)]):
+async def run_draw(request: Request, draw_id: str, user: MaybeUser, s: Annotated[Settings, Depends(get_settings)],
+                   idempotency_key: Annotated[str | None, Header()] = None):
     owner = _owner(user, s)
-    draw = await run_in_threadpool(db.claim_draw, draw_id[:64], owner)
-    if draw is None:
-        raise HTTPException(409, "Draw not found, not yours, or already run")
-    entries = json.loads(draw.entries_json or "[]")
+    idem = _idempotency_info(owner, f"POST /api/v2/draws/{draw_id}/run", idempotency_key, {})
+    if replay := await _replay(idem):
+        return replay
+    # Do not expend entropy on invalid/previously executed requests.
+    existing = await run_in_threadpool(db.get_draw, draw_id[:64])
+    if not existing or existing.owner_id != owner or existing.status != "committed":
+        raise HTTPException(409, "Draw not found, not yours, or already started")
     res = await get_entropy(request).get_stream(owner)
-    picked = draw_winners(res.stream, entries, draw.winners)
-    prov = res.provenance.as_dict()
-    public = {"winners": [{"index": i, "entry": entries[i]} for i in picked]}
-    details = {"draw_id": draw.id, "title": draw.title, "entries_count": draw.entries_count,
-               "entries_sha256": draw.entries_sha256, "winners": draw.winners,
-               "commit_receipt_id": draw.commit_receipt_id}
-    receipt, _ = build_receipt(get_signer(request), "draw", prov, public_result=public, details=details)
-    await run_in_threadpool(db.save_receipt, receipt, owner)
-    await run_in_threadpool(db.finish_draw, draw.id, receipt["payload"]["receipt_id"])
+    seed = res.stream.read(64)
+    draw = await run_in_threadpool(db.claim_draw_seeded, draw_id[:64], owner, seed, res.provenance.as_dict())
+    if draw is None:
+        raise HTTPException(409, "Draw already started; seed discarded")
+    # Crash after claim leaves status 'seeded'. Recovery uses persisted seed, never a new random draw.
+    receipt, winners = _calculate_result(draw, get_signer(request))
+    response = {"winners": winners, "receipt": receipt,
+                "verify_url": f"/verify/{receipt['payload']['receipt_id']}"}
+    await run_in_threadpool(db.finish_draw_tx, draw.id, owner, receipt,
+                            (*idem, response) if idem else None)
+    prov = json.loads(draw.seed_provenance)
     await run_in_threadpool(db.record_usage, owner, "draw", length=draw.entries_count,
                             sources=prov["sources"], quantum=prov["quantum"])
-    receipt_id = receipt["payload"]["receipt_id"]
-    return {"winners": public["winners"], "receipt": receipt, "verify_url": f"/#/verify/{receipt_id}"}
+    return response

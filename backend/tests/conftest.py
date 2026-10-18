@@ -1,4 +1,5 @@
 import os
+import uuid
 
 import pytest
 
@@ -11,7 +12,21 @@ def _isolated_settings(tmp_path, monkeypatch):
     from app import db
     from app.config import get_settings
 
-    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'test.db'}")
+    pg_admin_dsn = os.environ.get("PG_TEST_ADMIN_DSN",
+                                 "postgresql://qpg_test:qpg_test@localhost:5432/qpg_test")
+    pg_schema = None
+    if os.environ.get("QPG_TEST_POSTGRES") == "1":
+        import psycopg
+        from psycopg import sql
+
+        pg_schema = "qpg_test_" + uuid.uuid4().hex[:20]
+        with psycopg.connect(pg_admin_dsn, autocommit=True) as conn:
+            conn.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(pg_schema)))
+        monkeypatch.setenv("DATABASE_URL",
+                           f"postgresql+psycopg://qpg_test:qpg_test@localhost:5432/qpg_test"
+                           f"?options=-csearch_path%3D{pg_schema}")
+    else:
+        monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'test.db'}")
     monkeypatch.setenv("SIGNING_KEY_PATH", str(tmp_path / "signing_keys.json"))
     for var in ("ANU_API_KEY", "IBM_QUANTUM_TOKEN", "ANTHROPIC_API_KEY", "CLERK_SECRET_KEY", "CLERK_WEBHOOK_SECRET"):
         monkeypatch.delenv(var, raising=False)
@@ -24,6 +39,12 @@ def _isolated_settings(tmp_path, monkeypatch):
     yield
     get_settings.cache_clear()
     db.reset_engine()
+    if pg_schema is not None:
+        import psycopg
+        from psycopg import sql
+
+        with psycopg.connect(pg_admin_dsn, autocommit=True) as conn:
+            conn.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(pg_schema)))
 
 
 class FakeProvider:

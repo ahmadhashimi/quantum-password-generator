@@ -1,0 +1,56 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --color-quantum-400: #22d3ee;
+  --color-quantum-500: #06b6d4;
+  --color-violet-glow: #a78bfa;
+}
+
+:root {
+  color-scheme: light dark;
+}
+
+body {
+  @apply min-h-dvh bg-slate-50 text-slate-900 antialiased dark:bg-[#070b16] dark:text-slate-100;
+}
+
+.bg-aurora {
+  background:
+    radial-gradient(60rem 40rem at 10% -10%, rgb(34 211 238 / 0.14), transparent 60%),
+    radial-gradient(50rem 35rem at 100% 0%, rgb(167 139 250 / 0.16), transparent 60%);
+}
+
+@utility glass {
+  @apply rounded-2xl border border-slate-200/70 bg-white/70 shadow-xl shadow-slate-900/5 backdrop-blur-xl
+    dark:border-white/10 dark:bg-white/[0.04] dark:shadow-black/30;
+}
+
+@utility text-gradient {
+  @apply bg-gradient-to-r from-cyan-400 to-violet-400 bg-clip-text text-transparent;
+}
+
+@utility btn {
+  @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-medium transition
+    focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-400 disabled:cursor-not-allowed
+    disabled:opacity-50;
+}
+
+@utility btn-primary {
+  @apply btn bg-gradient-to-r from-cyan-500 to-violet-500 text-white shadow-lg shadow-cyan-500/20 hover:brightness-110;
+}
+
+@utility btn-ghost {
+  @apply btn border border-slate-200 bg-white/60 text-slate-700 hover:bg-white dark:border-white/10 dark:bg-white/5
+    dark:text-slate-200 dark:hover:bg-white/10;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
