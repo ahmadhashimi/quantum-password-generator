@@ -39,11 +39,14 @@ export default defineConfig({
       },
     },
     {
-      command: "npx next start --hostname 127.0.0.1 --port 3000",
+      // The standalone server, assembled exactly as in web/Dockerfile.
+      command: "cp -r .next/static .next/standalone/.next/ && cp -r public .next/standalone/ && " +
+        "node .next/standalone/server.js",
       url: "http://127.0.0.1:3000/healthz",
       reuseExistingServer: false,
       timeout: 60_000,
-      env: { API_INTERNAL_URL: "http://127.0.0.1:8000", NEXT_TELEMETRY_DISABLED: "1" },
+      env: { API_INTERNAL_URL: "http://127.0.0.1:8000", NEXT_TELEMETRY_DISABLED: "1", PORT: "3000",
+             HOSTNAME: "127.0.0.1" },
     },
   ],
 });
