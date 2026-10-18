@@ -1,104 +1,89 @@
-# Deploy checklist (≈ 30 minutes)
+# Deploy checklist (about 30 minutes)
 
-Everything below is the exact order to go from this repo to a live, signed-up, quantum-connected service.
-Nothing in this file is a secret; your secrets go in `backend/.env`, which is git-ignored.
+From this repository to a live service: Caddy (TLS) in front of the Next.js site and the FastAPI API, with
+PostgreSQL. Nothing in this file is a secret; your secrets go in `deploy/.env`, which is git-ignored.
+Operations after launch (backups, restores, rollback, key compromise) are in [RUNBOOK.md](RUNBOOK.md).
 
 ## 0. What you need
 
 | Item | Where to get it | Needed for |
 |---|---|---|
-| A Linux VM with Docker (2 vCPU / 2 GB is plenty) and a public IP | Hetzner, DigitalOcean, Fly, AWS Lightsail… | Running the app |
-| A domain, with `A`/`AAAA` records → the VM | Your registrar | HTTPS (Caddy issues the certificate automatically) |
+| A Linux VM with Docker Compose (2 vCPU / 4 GB) and a public IP | Hetzner, DigitalOcean, AWS Lightsail… | Running the stack |
+| A domain with `A`/`AAAA` records pointing at the VM | Your registrar | HTTPS (Caddy issues the certificate automatically) |
 | **Clerk** application | clerk.com → Create application | Sign-up / sign-in, MFA, passkeys |
 | **IBM Quantum** API key + Open Plan instance CRN | quantum.cloud.ibm.com → API keys; Instances (us-east) | Real quantum hardware |
 | **ANU Quantum Numbers** API key (optional) | quantumnumbers.anu.edu.au | Second live quantum source |
-| **Anthropic** API key (optional) | console.anthropic.com | AI assistant |
+| **Anthropic** API key (optional) | console.anthropic.com | AI assistant (Sonnet 5.5 by default) |
 
 ## 1. Clerk setup (10 min)
 
 1. Create the application. Copy the **Publishable key** (`pk_live_…`) and **Secret key** (`sk_live_…`).
-2. **User & authentication → Email, Passkeys:** enable passkeys. **Multi-factor:** enable authenticator app + backup codes.
+2. **User & authentication:** enable passkeys. **Multi-factor:** enable authenticator app and backup codes.
 3. **Attack protection:** enable bot protection and disposable-email blocking.
 4. **Sessions → Customize session token**, paste exactly:
    ```json
    {"email": "{{user.primary_email_address}}", "name": "{{user.full_name}}", "metadata": "{{user.public_metadata}}"}
    ```
-5. **Domains:** add your production domain. Note the **Frontend API** host (looks like `clerk.yourdomain.com`); it goes in `CLERK_HOSTS`.
-6. After your first sign-up, open your user in the Clerk dashboard and set **Public metadata** to `{"role": "admin"}`. Enrol MFA on that account — admin routes require a second factor verified within the hour.
-7. Optional: **Webhooks → Add endpoint** `https://yourdomain.com/api/v2/webhooks/clerk`, events `user.created`, `user.updated`, `user.deleted`; copy the signing secret.
+5. **Domains:** add your production domain. The site's CSP picks up the Clerk Frontend API host from the
+   publishable key automatically.
+6. After your first sign-up, set your user's **Public metadata** to `{"role": "admin"}` and enrol MFA. Admin routes
+   require a second factor verified within the hour.
+7. Optional: **Webhooks → Add endpoint** `https://yourdomain.com/api/v2/webhooks/clerk` with events `user.created`,
+   `user.updated` and `user.deleted`. Copy the signing secret.
 
 ## 2. Server
 
 ```bash
-git clone -b v2 https://github.com/ahmadhashimi/quantum-password-generator.git
+git clone https://github.com/ahmadhashimi/quantum-password-generator.git
 cd quantum-password-generator
-cp backend/.env.example backend/.env
+cp deploy/.env.example deploy/.env && chmod 600 deploy/.env
 ```
 
-Edit `backend/.env` — **only keys**; compose forces every production setting itself:
-
-```ini
-CLERK_SECRET_KEY=sk_live_...
-CLERK_WEBHOOK_SECRET=whsec_...          # if you set up the webhook
-IBM_MODE=hardware
-IBM_QUANTUM_TOKEN=...                   # IBM Cloud API key
-IBM_QUANTUM_INSTANCE=crn:v1:...         # Open Plan instance CRN
-ANU_API_KEY=...                         # optional
-ANTHROPIC_API_KEY=...                   # optional; omit to run without the assistant
-ASSISTANT_MODEL=claude-opus-5-5         # or claude-haiku-5-5 for ~40x lower assistant cost
-```
-
-Then:
+Fill in `deploy/.env`: `DOMAIN`, a long URL-safe `POSTGRES_PASSWORD`, the Clerk keys, IBM/ANU keys and optionally
+`ANTHROPIC_API_KEY`. Compose forces every production setting itself (environment, hosts, origins, database URL,
+trusted proxies). Then:
 
 ```bash
-DOMAIN=yourdomain.com VITE_CLERK_PUBLISHABLE_KEY=pk_live_... docker compose up -d --build
-docker compose logs -f app        # wait for "Application startup complete"
+docker compose --env-file deploy/.env up -d --build
+docker compose --env-file deploy/.env logs -f api      # wait for "Application startup complete"
 ```
 
-Caddy obtains the TLS certificate on first request. The first IBM harvest runs in the background within a minute;
-until the pool has bytes, results use ANU/LfD and are still labelled honestly.
+At startup the API applies database migrations, creates the signing key in the private `api_data` volume (0600) and
+records `key.loaded` in the audit log. Caddy obtains the TLS certificate on the first request. The first IBM harvest
+runs in the background; until the pool has bytes, results use ANU/LfD (or the OS CSPRNG) and say so.
 
 ## 3. Verify the deployment (5 min)
 
 ```bash
-curl -s https://yourdomain.com/api/v2/health
-curl -s https://yourdomain.com/api/v2/entropy/status | python -m json.tool     # providers configured/available
-curl -s https://yourdomain.com/.well-known/quantumpass-keys.json                # your public signing keys
-curl -s "https://yourdomain.com/api/v2/password?length=24&receipt=true"         # provenance should say quantum=true once a source is live
-curl -sI https://yourdomain.com/ | grep -iE "strict-transport|content-security|cache-control"
+deploy/smoke.sh https://yourdomain.com
 ```
 
-- Open the site, **Sign up free**, enrol MFA, set your admin role, open **Admin** — you should see users, usage and AI spend.
-- Generate a password: the badge should read **Quantum · …** with the IBM backend and job ID on the verify page.
-- Run `python -m scripts.verify_receipt` against a downloaded receipt and your `/.well-known` keys.
-- Optional: check TLS at ssllabs.com and confirm hybrid post-quantum key exchange (X25519MLKEM768) is offered.
+It checks API and web health, the key set, security headers (CSP nonce, HSTS, no-store), a receipt round trip and
+the status page. Then, by hand:
 
-## 4. Back up the one thing that matters
+- Sign up, enrol MFA, set the admin role, open **/admin**: stats, the audit log (run **Verify hash chain**) and
+  providers.
+- Generate a password with a receipt and open it in the Proof Explorer. Both signatures should verify **in your
+  browser** and on the server, and the IBM backend and job id should appear under operator-asserted provenance.
+- Download the evidence and run the standalone verifier: `python verify_receipt.py evidence.json keys.json`.
 
-`/data` (Docker volume `app-data`) holds **`signing_keys.json`**, the entropy pool and the database. If the signing
-key is lost, every receipt ever issued becomes unverifiable. Back the volume up, store the key file in a password
-manager or secrets vault, and consider moving to a KMS/HSM (roadmap).
+## 4. Back up from day one
 
 ```bash
-docker run --rm -v quantum-password-generator_app-data:/data -v "$PWD":/backup alpine \
-  tar czf /backup/qpg-data-$(date +%F).tgz -C /data .
+QPG_BACKUP_PASSPHRASE='…stored apart from the backups…' deploy/backup.sh ./backups
 ```
 
-## 5. Key rotation (when needed)
+Run it daily (cron or a systemd timer). Copy `./backups` off the host, and run `deploy/restore-test.sh` on a copy
+monthly; see [RUNBOOK.md](RUNBOOK.md#backups). If the signing key is lost, receipts can't be re-issued under it.
+If it leaks, follow the emergency procedure there.
 
-1. Export the current public key set from `/.well-known/quantumpass-keys.json`.
-2. Set `RETIRED_SIGNING_KEYS='[{"key_id":"…","ed25519":"…","ml-dsa-65":"…","status":"retired"}]'` (or `"revoked"` with
-   `"revoked_at": <unix seconds>` if the key was compromised).
-3. Delete `/data/signing_keys.json` (or set `SIGNING_KEYS` to new seeds) and restart. Old receipts stay verifiable;
-   receipts issued by a revoked key after its revocation time are rejected.
-
-## 6. Costs to expect
+## 5. Costs to expect
 
 | Item | Typical |
 |---|---|
-| VM + domain | $5–12 / month |
-| IBM Quantum Open Plan | $0 (10 QPU-min per 28 days; `IBM_MAX_JOBS_PER_DAY=2` keeps you inside it) |
-| ANU API | per request; batched to 1 call per 16 seeds and interval-throttled |
+| VM + domain | $10–20 / month |
+| IBM Quantum Open Plan | $0 (10 QPU-minutes per 28 days; `IBM_MAX_JOBS_PER_DAY=2` keeps you inside it, enforced across restarts) |
+| ANU API | per request; batched to one call per 16 seeds and interval-throttled |
 | Clerk | free up to the free MAU tier |
 | AI assistant | bounded by `ASSISTANT_DAILY_BUDGET_USD` / `ASSISTANT_MONTHLY_BUDGET_USD` (defaults $10 / $150) |
 
