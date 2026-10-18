@@ -76,6 +76,23 @@ async def signing_keys(request: Request):
     return {"algorithms": ["ed25519", "ml-dsa-65"], "keys": get_keyring(request).public()}
 
 
+@router.get("/api/v2/receipts/{receipt_id}/verify-material")
+@limiter.limit(general_limit)
+async def receipt_verify_material(request: Request, receipt_id: str):
+    """Byte-exact verifier input; Python float formatting is not JS JSON.stringify-compatible."""
+    from ..receipts import SIGNING_DOMAIN, canonical
+
+    receipt = await run_in_threadpool(db.get_receipt, receipt_id[:64])
+    if receipt is None:
+        raise HTTPException(404, "Receipt not found")
+    keys = get_keyring(request).get(receipt["payload"].get("key_id"))
+    if keys is None:
+        raise HTTPException(404, "Receipt signing key unavailable")
+    return {"receipt": receipt, "canonical_payload": canonical(receipt["payload"]).decode("utf-8"),
+            "signing_domain": SIGNING_DOMAIN.decode("utf-8"),
+            "public_key": keys, "trust": "server-published-key-not-independent-attestation"}
+
+
 @router.get("/api/v2/receipts/{receipt_id}")
 @limiter.limit(general_limit)
 async def get_receipt(request: Request, receipt_id: str):
