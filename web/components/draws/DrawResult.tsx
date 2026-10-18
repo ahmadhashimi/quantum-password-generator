@@ -4,6 +4,7 @@ import { Ban, FileSignature, History, ListChecks, RotateCcw, ShieldQuestion, Tro
 import type { ReactNode } from "react";
 
 import { ReceiptCard } from "@/components/receipts/ReceiptCard";
+import { ProvenanceNotice } from "@/components/generate/ProvenanceNotice";
 import { ProvenanceBadge } from "@/components/receipts/ProvenanceBadge";
 import { Badge, Button, ButtonLink, Callout, Card, CardBody, CardHeader } from "@/components/ui";
 
@@ -11,9 +12,9 @@ import { CopyValue, ShareLink } from "./CopyValue";
 import { type DrawResult, verifyPath } from "./draw-data";
 import { PhaseTitle } from "./PhaseTitle";
 
-const HEALTH_LABELS: Record<string, string> = {
-  sp800_90b: "SP 800-90B-style RCT/APT screening (not a NIST validation)",
-};
+const SCREENING = "SP 800-90B-style RCT/APT screening (not a NIST validation)";
+/** `sp800_90b_style` is what the backend emits; `sp800_90b` appears in receipts issued before it was renamed. */
+const HEALTH_LABELS: Record<string, string> = { sp800_90b_style: SCREENING, sp800_90b: SCREENING };
 
 function EvidenceRow({ icon, title, badge, children }: { icon: ReactNode; title: string; badge: ReactNode;
                                                          children: ReactNode }) {
@@ -42,6 +43,7 @@ function Evidence({ result }: { result: DrawResult }) {
       </EvidenceRow>
       <EvidenceRow icon={<ShieldQuestion />} title="Provenance" badge={<Badge tone="warning">Operator-asserted</Badge>}>
         <ProvenanceBadge provenance={provenance} />
+        <ProvenanceNotice provenance={provenance} />
         {health.length > 0 && (
           <ul className="list-disc pl-4">
             {health.map(([name, outcome]) => <li key={name}>{HEALTH_LABELS[name] ?? name}: {outcome}</li>)}
@@ -108,7 +110,7 @@ export function DrawResultCards({ result, focusTitle, onStartOver }: {
             </li>
             <li>
               It then re-derives the winners from the published seed and compares them with the signed result. The page
-              also shows how many draws have ever used the same list, which exposes re-rolling.
+              also shows how many draws this server has recorded over the same list, which makes published re-rolls visible.
             </li>
           </ol>
           {result.selection && (

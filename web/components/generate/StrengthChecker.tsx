@@ -104,7 +104,7 @@ export function StrengthChecker() {
           )}
         </Field>
 
-        {failed && (
+        {failed && value && (
           <Callout tone="danger" role="alert">The strength checker could not be loaded. Try typing again.</Callout>
         )}
         {!failed && value && !shown && <p className="text-xs text-subtle">Loading the checker…</p>}
@@ -131,6 +131,7 @@ export function StrengthChecker() {
             <p className="text-xs text-subtle">
               A heuristic estimate of how guessable a password is from common words, patterns and leaks. It is not a
               guarantee.
+              {value.length > MAX_CHECKED && ` Only the first ${MAX_CHECKED} characters were scored.`}
             </p>
           </div>
         )}

@@ -32,8 +32,15 @@ describe("SessionHistory", () => {
     expect(screen.getByText(/Password · 120 bits · Quantum-seeded/)).toBeInTheDocument();
   });
 
+  it("fully masks short values instead of showing their ends", () => {
+    renderHistory(["Sh0rt!x8"]);
+    fireEvent.click(screen.getByRole("button", { name: "add entry" }));
+    expect(screen.getByTestId("history-value")).toHaveTextContent(/^•{8}$/);
+    expect(document.body.textContent).not.toContain("Sh0");
+  });
+
   it("keeps the newest ten, newest first", () => {
-    const values = Array.from({ length: HISTORY_LIMIT + 2 }, (_, i) => `secret-value-${String(i).padStart(2, "0")}`);
+    const values = Array.from({ length: HISTORY_LIMIT + 2 }, (_, i) => `secret-value-${String(i).padStart(3, "0")}`);
     renderHistory(values);
     for (const b of screen.getAllByRole("button", { name: "add entry" })) fireEvent.click(b);
 

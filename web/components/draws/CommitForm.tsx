@@ -69,7 +69,7 @@ export function CommitForm({ busy, status, focusTitle, onSubmit }: {
   return (
     <Card>
       <CardHeader icon={<Lock />} title={<PhaseTitle focus={focusTitle}>1. Commit your entries</PhaseTitle>}
-                  description="The list is fingerprinted and signed before any randomness exists." />
+                  description="The server fingerprints and signs the list before it gathers any randomness for the draw." />
       <CardBody>
         <form onSubmit={submit} noValidate className="space-y-6">
           {/* On mobile the preview sits right under the entries; from lg it fills the right column. */}
@@ -93,8 +93,9 @@ export function CommitForm({ busy, status, focusTitle, onSubmit }: {
             <aside aria-label="Entry preview"
                    className="space-y-4 self-start rounded-lg border border-border bg-surface-sunken p-4
                               lg:col-start-2 lg:row-span-3 lg:row-start-1">
-              <div role="status" className="space-y-4">
-                <p className="text-sm text-muted">
+              <div className="space-y-4">
+                {/* Only the count is a live region: announcing the whole preview on every keystroke would be noise. */}
+                <p role="status" className="text-sm text-muted">
                   <span className="text-2xl font-semibold tabular-nums text-fg">{count.toLocaleString("en-US")}</span>{" "}
                   {count === 1 ? "entry" : "entries"} will be committed
                 </p>

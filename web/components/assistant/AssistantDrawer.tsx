@@ -132,6 +132,25 @@ export function AssistantDrawer({ open, onClose, needsSignIn }: {
     return () => document.removeEventListener("keydown", onKey);
   }, [open, onClose]);
 
+  // Modal behaviour: remember what opened the dialog, keep focus and page scroll inside it, and hand both back on close.
+  // Declared before the autofocus effect so the opener is read before focus moves into the dialog.
+  useEffect(() => {
+    if (!open) return;
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const { overflow } = document.body.style;
+    document.body.style.overflow = "hidden";
+    const keepFocusInside = (e: FocusEvent) => {
+      const root = dialogRef.current;
+      if (root && e.target instanceof Node && !root.contains(e.target)) root.querySelector<HTMLElement>(FOCUSABLE)?.focus();
+    };
+    document.addEventListener("focusin", keepFocusInside);
+    return () => {
+      document.removeEventListener("focusin", keepFocusInside);
+      document.body.style.overflow = overflow;
+      opener?.focus();
+    };
+  }, [open]);
+
   useEffect(() => {
     if (!open) return;
     const root = dialogRef.current;
@@ -145,6 +164,7 @@ export function AssistantDrawer({ open, onClose, needsSignIn }: {
   }, [items, busy]);
 
   const push = (body: Body) => setItems((prev) => [...prev, { ...body, id: ++nextId.current }]);
+  const focusInput = () => dialogRef.current?.querySelector<HTMLElement>("input[data-autofocus]")?.focus();
 
   const cancelStream = () => {
     abortRef.current?.abort();
@@ -161,6 +181,7 @@ export function AssistantDrawer({ open, onClose, needsSignIn }: {
     setBusy(true);
     setAnnouncement("The assistant is working.");
     push({ kind: "user", text });
+    focusInput(); // the Send button or suggestion that was just used is replaced, which would drop focus to <body>
     try {
       for await (const ev of streamChat(text, conversationRef.current, auth.getToken, controller.signal)) {
         if (controller.signal.aborted) break;
@@ -194,12 +215,14 @@ export function AssistantDrawer({ open, onClose, needsSignIn }: {
         abortRef.current = null;
         setBusy(false);
       }
+      if (document.activeElement === document.body) focusInput();
     }
   };
 
   const stop = () => {
     cancelStream();
     push({ kind: "note", text: "Stopped." });
+    focusInput();
   };
 
   const reset = () => {
@@ -209,7 +232,7 @@ export function AssistantDrawer({ open, onClose, needsSignIn }: {
     setItems([]);
     setInput("");
     setAnnouncement("Conversation cleared.");
-    dialogRef.current?.querySelector<HTMLElement>("[data-autofocus]")?.focus();
+    focusInput();
   };
 
   const onSubmit = (e: FormEvent) => {

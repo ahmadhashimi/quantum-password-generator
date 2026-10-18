@@ -45,6 +45,18 @@ describe("StrengthChecker", () => {
     expect(["Strong", "Very strong"]).toContain(meter.getAttribute("aria-valuetext"));
   }, 30_000);
 
+  it("says when only the first 100 characters were scored", async () => {
+    render(<StrengthChecker />);
+    const input = screen.getByLabelText("Password to check");
+    fireEvent.change(input, { target: { value: "aB3$".repeat(30) } });
+    await screen.findByRole("meter", {}, { timeout: 15_000 });
+    expect(screen.getByText(/Only the first 100 characters were scored/)).toBeInTheDocument();
+
+    fireEvent.change(input, { target: { value: "aB3$".repeat(10) } });
+    await screen.findByRole("meter", {}, { timeout: 15_000 });
+    expect(screen.queryByText(/Only the first 100 characters were scored/)).not.toBeInTheDocument();
+  }, 30_000);
+
   it("hides the result again when the input is cleared", async () => {
     render(<StrengthChecker />);
     const input = screen.getByLabelText("Password to check");

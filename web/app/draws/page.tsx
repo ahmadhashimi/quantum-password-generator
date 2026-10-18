@@ -15,7 +15,7 @@ const STEPS: { icon: ReactNode; title: string; body: string }[] = [
     icon: <Lock />,
     title: "Commit",
     body: "You submit the entries and how many winners. The server signs a receipt with a SHA-256 fingerprint of the " +
-      "sorted list, before any randomness exists.",
+      "sorted list before it gathers any randomness for the draw.",
   },
   {
     icon: <Shuffle />,
@@ -54,6 +54,11 @@ export default function DrawsPage() {
         <p>
           The operator can still choose when to run a draw or withhold a result; receipts make tampering with a
           published result detectable. Not for regulated gambling or lotteries.
+        </p>
+        <p>
+          The server also picks the selection seed when the draw runs, so a dishonest operator could try several draws
+          privately and publish only one. Receipts make every published re-roll of a list visible, but cannot reveal
+          draws that were never issued.
         </p>
         <p>
           Valid signatures prove what this server signed, not that a quantum device independently attested the entropy.

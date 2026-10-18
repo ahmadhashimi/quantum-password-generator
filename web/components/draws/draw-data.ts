@@ -66,9 +66,9 @@ export type ConflictKind = "seeded" | "needs_investigation";
 
 export const CONFLICT_COPY: Record<ConflictKind, { title: string; body: string }> = {
   seeded: {
-    title: "This draw didn't finish",
-    body: "This draw was interrupted after its seed was saved. It will not be re-run with new randomness; an " +
-      "operator will complete it from the saved seed.",
+    title: "This draw is being finalised",
+    body: "Its outcome is already fixed and it will not be re-run with new randomness. If a run is still in progress, " +
+      "checking again in a moment shows the result. If it was interrupted, an operator completes it from the saved seed.",
   },
   needs_investigation: {
     title: "This draw needs operator attention",

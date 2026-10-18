@@ -154,6 +154,52 @@ describe("Generator", () => {
     expect(screen.queryByTestId("secret")).toHaveTextContent("Press Generate to create a password");
   });
 
+  it("shows the request id with an API error", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(
+      JSON.stringify({ detail: "Entropy service busy" }),
+      { status: 503, headers: { "content-type": "application/json", "x-request-id": "req-abc123" } },
+    ));
+    render(<Generator />);
+    generate();
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Entropy service busy");
+    expect(alert).toHaveTextContent("Request req-abc123");
+  });
+
+  it("aborts the request when the secret type changes and never shows the late result", async () => {
+    let signal: AbortSignal | null | undefined;
+    vi.spyOn(globalThis, "fetch").mockImplementation((_input, init) => {
+      signal = init?.signal;
+      return new Promise<Response>((resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+        setTimeout(() => resolve(new Response(passwordBody(), { status: 200 })), 50);
+      });
+    });
+    render(<Generator />);
+    generate();
+    expect(await screen.findByRole("button", { name: "Generating…" })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Passphrase" }));
+    expect(signal?.aborted).toBe(true);
+    expect(screen.getByRole("button", { name: "Generate passphrase" })).toBeEnabled();
+    await new Promise((r) => setTimeout(r, 80));
+    expect(screen.queryByText(SECRET)).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("aborts an in-flight request on unmount", async () => {
+    let signal: AbortSignal | null | undefined;
+    vi.spyOn(globalThis, "fetch").mockImplementation((_input, init) => {
+      signal = init?.signal;
+      return new Promise<Response>(() => undefined);
+    });
+    const { unmount } = render(<Generator />);
+    generate();
+    await waitFor(() => expect(signal).toBeDefined());
+    unmount();
+    expect(signal?.aborted).toBe(true);
+  });
+
   it("clears the result when the secret type changes", async () => {
     mockFetch(passwordBody());
     render(<Generator />);

@@ -22,8 +22,9 @@ export function RunPanel({ busy, status, focusTitle, onRun, onStartOver }: {
                   description="The server gathers entropy, saves the selection seed, then picks winners from the committed list." />
       <CardBody className="space-y-5">
         <p className="text-sm text-muted">
-          For the strongest evidence, post the commitment link above before you run. A draw runs once: pressing the
-          button again, or retrying after a network error, returns the stored result and never draws new randomness.
+          For the strongest evidence, post the commitment link above before you run. A draw runs once: once it has
+          run, pressing the button again or retrying after a network error returns the stored result instead of
+          drawing again.
         </p>
         {status}
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">

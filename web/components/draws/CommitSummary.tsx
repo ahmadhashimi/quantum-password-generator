@@ -30,7 +30,7 @@ export function CommitSummary({ committed, focusTitle, intro }: {
   return (
     <Card>
       <CardHeader icon={<Lock />} title={<PhaseTitle focus={focusTitle}>Entries committed</PhaseTitle>}
-                  description="Signed before any randomness exists, so swapping in a different list later would be detectable."
+                  description="Signed before the server gathers any randomness for this draw. Anyone holding this receipt can tell if a different list is later presented as the committed one."
                   action={<Badge tone="success" icon={<CheckCircle2 aria-hidden />}>Step 1 done</Badge>} />
       <CardBody className="space-y-5">
         {intro}

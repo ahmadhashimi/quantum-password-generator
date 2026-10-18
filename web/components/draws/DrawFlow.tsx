@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 
-import { Callout, ButtonLink } from "@/components/ui";
+import { Button, ButtonLink, Callout } from "@/components/ui";
 import { ApiError, apiWithText, idempotencyKey } from "@/lib/api/client";
 import { DrawCommitResponse, DrawRunResponse } from "@/lib/api/schemas";
 import { useAppAuth } from "@/lib/auth/client";
@@ -21,7 +21,7 @@ import { RunPanel } from "./RunPanel";
 
 const SIGN_IN_HREF = "/sign-in?redirect_url=%2Fdraws";
 const COMMIT_RETRY = "Retrying is safe: the same request key is reused, so it can't create a second draw.";
-const RUN_RETRY = "Retrying is safe: a draw can only run once, and a retry returns the stored result.";
+const RUN_RETRY = "Retrying is safe: a draw runs only once, and a retry after it ran returns the stored result.";
 
 interface Conflict {
   kind: ConflictKind;
@@ -164,11 +164,9 @@ export function DrawFlow() {
             {committed && <> Quote draw ID {committed.drawId} if you contact the operator.</>}
           </p>
           <p className="pt-2">
-            <button type="button" onClick={() => void run()} disabled={busy}
-                    className="text-sm font-medium text-accent underline underline-offset-2 hover:text-accent-strong
-                               disabled:opacity-50">
+            <Button variant="secondary" size="sm" onClick={() => void run()} disabled={busy}>
               {busy ? "Checking…" : "Check again"}
-            </button>
+            </Button>
           </p>
         </Callout>
       )}

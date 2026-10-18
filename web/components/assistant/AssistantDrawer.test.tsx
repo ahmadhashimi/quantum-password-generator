@@ -167,6 +167,59 @@ describe("AssistantDrawer", () => {
     expect(JSON.parse(String(requests(fetchMock)[0]?.init.body)).message).toBe("I need a memorable Wi-Fi passphrase");
   });
 
+  it("locks page scroll and hands focus and scroll back to the opener on close", () => {
+    const opener = document.createElement("button");
+    document.body.append(opener);
+    opener.focus();
+    const { unmount } = render(<AssistantDrawer open onClose={() => undefined} needsSignIn={false} />);
+    expect(screen.getByLabelText("Message")).toHaveFocus();
+    expect(document.body.style.overflow).toBe("hidden");
+
+    unmount();
+    expect(document.body.style.overflow).toBe("");
+    expect(opener).toHaveFocus();
+    opener.remove();
+  });
+
+  it("pulls focus back into the dialog when it lands outside", () => {
+    const outside = document.createElement("button");
+    document.body.append(outside);
+    render(<AssistantDrawer open onClose={() => undefined} needsSignIn={false} />);
+    outside.focus();
+    expect(screen.getByRole("dialog")).toContainElement(document.activeElement as HTMLElement);
+    outside.remove();
+  });
+
+  it("keeps focus in the message box after sending, instead of dropping it to the page", async () => {
+    spyFetch(async () => streamOf(...FULL_CHAT));
+    render(<AssistantDrawer open onClose={() => undefined} needsSignIn={false} />);
+    fireEvent.click(screen.getByRole("button", { name: "I need a memorable Wi-Fi passphrase" }));
+    await screen.findByText("Here is a 19-character password.");
+    expect(screen.getByLabelText("Message")).toHaveFocus();
+  });
+
+  it("aborts the stream and deletes the conversation when it is closed mid-chat", async () => {
+    let chatSignal: AbortSignal | null | undefined;
+    const fetchMock = spyFetch(async (_input, init) => {
+      if (init?.method === "DELETE") return new Response('{"ok":true}', { status: 200 });
+      chatSignal = init?.signal;
+      const encoder = new TextEncoder();
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode(sse("conversation", { id: "conv-9" })));
+        },
+      }), { status: 200 });
+    });
+    const { unmount } = render(<AssistantDrawer open onClose={() => undefined} needsSignIn={false} />);
+    send("hello");
+    await waitFor(() => expect(screen.getByRole("button", { name: /Stop/ })).toBeInTheDocument());
+    await act(async () => { await new Promise((r) => setTimeout(r, 10)); });
+
+    unmount();
+    expect(chatSignal?.aborted).toBe(true);
+    await waitFor(() => expect(requests(fetchMock).some((r) => r.url.endsWith("/conversations/conv-9"))).toBe(true));
+  });
+
   it("wraps Tab focus inside the dialog", () => {
     render(<AssistantDrawer open onClose={() => undefined} needsSignIn={false} />);
     const close = screen.getByRole("button", { name: "Close assistant" });

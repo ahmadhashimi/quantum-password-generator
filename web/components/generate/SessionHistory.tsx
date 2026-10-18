@@ -20,6 +20,8 @@ export interface HistoryEntry {
 }
 
 export const HISTORY_LIMIT = 10;
+/** Below this length, showing the first 3 and last 2 characters would give away too large a share of the secret. */
+const PARTIAL_MASK_MIN = 16;
 
 interface SessionHistoryApi {
   entries: readonly HistoryEntry[];
@@ -45,6 +47,10 @@ export function HistoryProvider({ children }: { children: ReactNode }) {
 
 export const useSessionHistory = (): SessionHistoryApi => useContext(HistoryContext);
 
+/** Fully masked when short; longer values show only their ends (lib/format.maskSecret). */
+export const maskForHistory = (value: string): string =>
+  value.length < PARTIAL_MASK_MIN ? "•".repeat(Math.min(value.length, 12)) : maskSecret(value);
+
 const KIND_LABEL: Record<SecretKind, string> = { password: "Password", passphrase: "Passphrase", random: "Random key" };
 
 const timeOf = (at: number): string =>
@@ -56,7 +62,7 @@ function Row({ entry }: { entry: HistoryEntry }) {
   return (
     <li className="flex items-center gap-3 py-2.5">
       <div className="min-w-0 flex-1">
-        <code data-testid="history-value" className="block truncate text-sm text-fg">{maskSecret(entry.value)}</code>
+        <code data-testid="history-value" className="block truncate text-sm text-fg">{maskForHistory(entry.value)}</code>
         <p className="mt-0.5 text-xs text-subtle">
           {KIND_LABEL[entry.kind]} · {entry.entropyBits.toFixed(0)} bits · {entry.quantum ? "Quantum-seeded" : "Not quantum"}
         </p>

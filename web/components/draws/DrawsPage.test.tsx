@@ -15,6 +15,7 @@ describe("/draws page shell", () => {
     for (const step of ["Commit", "Run", "Verify"]) expect(html).toContain(step);
     expect(html).toContain("The operator can still choose when to run a draw or withhold a result");
     expect(html).toContain("Not for regulated gambling or lotteries.");
+    expect(html).toContain("a dishonest operator could try several draws privately and publish only one");
   });
 
   it("renders the empty form with submit disabled and nothing prefilled", () => {

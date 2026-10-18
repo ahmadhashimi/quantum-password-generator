@@ -148,7 +148,7 @@ describe("idempotency", () => {
     fill();
     fireEvent.click(commitButton());
     fireEvent.click(await screen.findByRole("button", { name: /run the draw/i }));
-    expect(await screen.findByText(/a draw can only run once/i)).toBeInTheDocument();
+    expect(await screen.findByText(/a draw runs only once/i)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /run the draw/i }));
     await screen.findByRole("heading", { name: "Winners" });
 
@@ -188,6 +188,84 @@ describe("requests", () => {
     fireEvent.click(commitButton());
     await screen.findByText("Entries committed");
     expect((init(spy.mock.calls[0] as unknown[]).headers as Record<string, string>).authorization).toBe("Bearer tok_123");
+  });
+});
+
+describe("double submit and leaving the page", () => {
+  it("sends one commit request for a double click", async () => {
+    const spy = vi.spyOn(globalThis, "fetch").mockImplementation(
+      () => new Promise<Response>((resolve) => setTimeout(() => resolve(json(commitBody(ENTRIES, 2))), 20)),
+    );
+    render(<DrawFlow />);
+    fill();
+    const form = commitButton().closest("form") as HTMLFormElement;
+    fireEvent.submit(form);
+    fireEvent.submit(form);
+    await screen.findByText("Entries committed");
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks before the tab is closed while a committed draw has not run, and stops asking once it has", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(json(commitBody(ENTRIES, 2)))
+      .mockResolvedValueOnce(json(runBody()));
+    const blocked = () => {
+      const e = new Event("beforeunload", { cancelable: true });
+      window.dispatchEvent(e);
+      return e.defaultPrevented;
+    };
+    render(<DrawFlow />);
+    fill();
+    expect(blocked()).toBe(false);
+    fireEvent.click(commitButton());
+    fireEvent.click(await screen.findByRole("button", { name: /run the draw/i }));
+    await screen.findByRole("heading", { name: "Winners" });
+    expect(blocked()).toBe(false);
+  });
+
+  it("asks before the tab is closed between commit and run", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(json(commitBody(ENTRIES, 2)));
+    render(<DrawFlow />);
+    fill();
+    fireEvent.click(commitButton());
+    await screen.findByText("Entries committed");
+    const e = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(e);
+    expect(e.defaultPrevented).toBe(true);
+  });
+});
+
+describe("evidence on the result", () => {
+  const evidence = (provenance: object) => runBody({
+    receipt: receipt("draw", RESULT_ID, { draw_id: DRAW_ID, commit_receipt_id: COMMIT_ID, winners: 2 },
+                     { winners: [{ index: 3, entry: "dave" }, { index: 2, entry: "carol" }],
+                       selection: { algorithm: "qpg-select/1", seed_hex: SEED } }, provenance),
+  });
+
+  async function finish(body: unknown) {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(json(commitBody(ENTRIES, 2)))
+      .mockResolvedValueOnce(json(body));
+    render(<DrawFlow />);
+    fill();
+    fireEvent.click(commitButton());
+    fireEvent.click(await screen.findByRole("button", { name: /run the draw/i }));
+    await screen.findByRole("heading", { name: "Winners" });
+  }
+
+  it("labels the screening the backend reports with the honest wording", async () => {
+    await finish(evidence({ sources: ["lfd"], quantum: true, quantum_bytes: 64, mixed_with: "os_csprng",
+                            health: { sp800_90b_style: "pass" } }));
+    expect(screen.getByText(/SP 800-90B-style RCT\/APT screening \(not a NIST validation\): pass/)).toBeInTheDocument();
+    expect(screen.queryByText(/sp800_90b_style/)).not.toBeInTheDocument();
+  });
+
+  it("says an OS CSPRNG-only draw is not quantum", async () => {
+    await finish(evidence({ sources: ["os_csprng"], quantum: false, quantum_bytes: 0, mixed_with: "os_csprng",
+                            health: { sp800_90b_style: "n/a" } }));
+    expect(screen.getByText(/Not quantum · OS CSPRNG/)).toBeInTheDocument();
+    expect(screen.getByText(/labelled not quantum/)).toBeInTheDocument();
+    expect(screen.getByText("Operator-asserted")).toBeInTheDocument();
   });
 });
 
@@ -268,7 +346,7 @@ describe("run errors", () => {
     return await screen.findByRole("button", { name: /run the draw/i });
   }
 
-  it("explains a draw interrupted after its seed was saved, and lets you check again with the same key", async () => {
+  it("explains a draw that is being finalised, and lets you check again with the same key", async () => {
     const spy = vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(json(commitBody(ENTRIES, 2)))
       .mockResolvedValueOnce(json({ detail: "This draw is being finalised; its outcome is already fixed. Retry shortly.",
@@ -276,16 +354,23 @@ describe("run errors", () => {
       .mockResolvedValueOnce(json(runBody({ replayed: true })));
     fireEvent.click(await toRunStep());
 
-    expect(await screen.findByText(
-      "This draw was interrupted after its seed was saved. It will not be re-run with new randomness; an operator " +
-      "will complete it from the saved seed.",
-    )).toBeInTheDocument();
+    expect(await screen.findByText("This draw is being finalised")).toBeInTheDocument();
+    expect(screen.getByText(/will not be re-run with new randomness/)).toBeInTheDocument();
+    expect(screen.getByText(/an operator completes it from the saved seed/)).toBeInTheDocument();
     expect(screen.getByText(/Server message: This draw is being finalised/)).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Winners" })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Check again" }));
     expect(await screen.findByText("Result already published (replayed)")).toBeInTheDocument();
     expect(keyOf(spy.mock.calls[2] as unknown[])).toBe(keyOf(spy.mock.calls[1] as unknown[]));
+  });
+
+  it("tells a seeded draw apart from one that needs an operator by the server's status, not its wording", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(json(commitBody(ENTRIES, 2)))
+      .mockResolvedValueOnce(json({ detail: "Draw unavailable", status: "needs_investigation" }, 409));
+    fireEvent.click(await toRunStep());
+    expect(await screen.findByText("This draw needs operator attention")).toBeInTheDocument();
   });
 
   it("explains a draw that needs an operator", async () => {
