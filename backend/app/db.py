@@ -1,0 +1,104 @@
+"""User + usage tracking. Stores metadata only — never passwords, passphrases, or chat contents."""
+
+from datetime import UTC, datetime
+
+from sqlmodel import Field, Session, SQLModel, create_engine, func, select
+
+from .config import get_settings
+
+
+def _now() -> datetime:
+    return datetime.now(UTC)
+
+
+class User(SQLModel, table=True):
+    __tablename__ = "users"
+    id: str = Field(primary_key=True)  # Clerk user id
+    email: str | None = None
+    name: str | None = None
+    created_at: datetime = Field(default_factory=_now)
+    last_seen: datetime = Field(default_factory=_now)
+    deleted: bool = False
+
+
+class UsageEvent(SQLModel, table=True):
+    __tablename__ = "usage_events"
+    id: int | None = Field(default=None, primary_key=True)
+    user_id: str | None = Field(default=None, index=True)
+    kind: str = Field(index=True)  # password | passphrase | random | assistant_message
+    length: int | None = None
+    entropy_bits: float | None = None
+    sources: str | None = None  # comma-separated provenance
+    quantum: bool = False
+    via_assistant: bool = False
+    created_at: datetime = Field(default_factory=_now, index=True)
+
+
+_engine = None
+
+
+def engine():
+    global _engine
+    if _engine is None:
+        url = get_settings().database_url
+        args = {"check_same_thread": False} if url.startswith("sqlite") else {}
+        _engine = create_engine(url, connect_args=args)
+    return _engine
+
+
+def init_db() -> None:
+    SQLModel.metadata.create_all(engine())
+
+
+def reset_engine() -> None:
+    global _engine
+    _engine = None
+
+
+def upsert_user(user_id: str, email: str | None = None, name: str | None = None, deleted: bool = False) -> None:
+    with Session(engine()) as s:
+        u = s.get(User, user_id) or User(id=user_id)
+        u.email = email or u.email
+        u.name = name or u.name
+        u.last_seen = _now()
+        u.deleted = deleted
+        s.add(u)
+        s.commit()
+
+
+def record_usage(user_id: str | None, kind: str, *, length: int | None = None, entropy_bits: float | None = None,
+                 sources: list[str] | None = None, quantum: bool = False, via_assistant: bool = False) -> None:
+    with Session(engine()) as s:
+        s.add(UsageEvent(user_id=user_id, kind=kind, length=length, entropy_bits=entropy_bits,
+                         sources=",".join(sources or []), quantum=quantum, via_assistant=via_assistant))
+        s.commit()
+
+
+def user_stats(user_id: str) -> dict:
+    with Session(engine()) as s:
+        rows = s.exec(select(UsageEvent.kind, func.count()).where(UsageEvent.user_id == user_id)
+                      .group_by(UsageEvent.kind)).all()
+        quantum = s.exec(select(func.count()).where(UsageEvent.user_id == user_id, UsageEvent.quantum)).one()
+    counts = dict(rows)
+    return {"counts": counts, "total": sum(counts.values()), "quantum": quantum}
+
+
+def admin_stats() -> dict:
+    with Session(engine()) as s:
+        users = s.exec(select(func.count()).select_from(User).where(User.deleted == False)).one()  # noqa: E712
+        events = dict(s.exec(select(UsageEvent.kind, func.count()).group_by(UsageEvent.kind)).all())
+        quantum = s.exec(select(func.count()).where(UsageEvent.quantum)).one()
+        recent = s.exec(select(User).where(User.deleted == False).order_by(User.last_seen.desc()).limit(20)).all()  # noqa: E712
+        daily = s.exec(select(func.date(UsageEvent.created_at), func.count())
+                       .group_by(func.date(UsageEvent.created_at))
+                       .order_by(func.date(UsageEvent.created_at).desc()).limit(30)).all()
+    total = sum(events.values())
+    return {
+        "users": users,
+        "events": events,
+        "total_events": total,
+        "quantum_share": (quantum / total) if total else 0.0,
+        "daily": [{"date": str(d), "count": c} for d, c in reversed(daily)],
+        "recent_users": [{"id": u.id, "email": u.email, "name": u.name, "last_seen": u.last_seen.isoformat()}
+                         for u in recent],
+    }

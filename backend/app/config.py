@@ -1,0 +1,67 @@
+"""Runtime configuration, loaded from environment variables (or a .env file)."""
+
+from functools import lru_cache
+from typing import Literal
+
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+    environment: str = "development"
+    allowed_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173", "http://localhost:8000"])
+    allowed_hosts: list[str] = Field(default_factory=lambda: ["*"])
+    frontend_dist: str = "../frontend/dist"
+
+    # Quantum entropy providers
+    anu_api_key: str | None = None
+    anu_api_url: str = "https://api.quantumnumbers.anu.edu.au"
+    lfd_api_url: str = "https://lfdr.de/qrng_api/qrng"
+    provider_timeout_s: float = 4.0
+    # "hardware" = real IBM QPU (needs token + CRN); "simulator" = local Qiskit Aer run of the same circuit,
+    # for testing the pipeline end to end. Simulator output is classical and is never labelled quantum.
+    ibm_mode: Literal["hardware", "simulator"] = "hardware"
+    ibm_sim_qubits: int = 127
+    ibm_quantum_token: str | None = None  # IBM Cloud API key
+    ibm_quantum_instance: str | None = None  # instance CRN (Open Plan instances live in us-east)
+    ibm_backend: str | None = None  # None = least busy
+    ibm_shots: int = 2048
+    ibm_harvest_interval_s: int = 6 * 3600
+    ibm_pool_min_bytes: int = 4096
+    # Hard cap on QPU jobs per rolling 24h. One job (all qubits, 2048 shots) uses seconds of QPU time;
+    # the Open Plan allows 10 minutes per 28 days, and paid instances bill per second.
+    ibm_max_jobs_per_day: int = 2
+    pool_path: str | None = None  # persist harvested IBM bytes (file is chmod 600)
+
+    # Assistant
+    anthropic_api_key: str | None = None
+    assistant_model: str = "claude-opus-5-5"
+
+    # Clerk
+    clerk_secret_key: str | None = None
+    clerk_jwt_key: str | None = None  # optional PEM for networkless verification
+    clerk_webhook_secret: str | None = None
+    # Hosts Clerk's browser SDK loads from (CSP). Add your production Clerk Frontend API host.
+    clerk_hosts: list[str] = Field(default_factory=lambda: ["https://*.clerk.accounts.dev"])
+
+    database_url: str = "sqlite:///./qpg.db"
+
+    # Rate limits (slowapi syntax)
+    rate_limit_anonymous: str = "30/minute"
+    rate_limit_user: str = "120/minute"
+    rate_limit_assistant: str = "20/minute"
+
+    @property
+    def assistant_enabled(self) -> bool:
+        return bool(self.anthropic_api_key)
+
+    @property
+    def auth_enabled(self) -> bool:
+        return bool(self.clerk_secret_key)
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()

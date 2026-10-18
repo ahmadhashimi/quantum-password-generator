@@ -1,0 +1,9 @@
+**/node_modules
+**/__pycache__
+**/.pytest_cache
+**/.env
+**/.env.*
+frontend/dist
+backend/*.db
+backend/entropy_pool.bin
+.git

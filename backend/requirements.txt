@@ -1,0 +1,11 @@
+fastapi==0.143.3
+uvicorn[standard]==0.54.0
+httpx==0.28.1
+pydantic-settings==2.16.0
+sqlmodel==0.0.48
+slowapi==0.1.10
+anthropic==1.15.0
+clerk-backend-api==7.0.0
+svix==2.8.0
+cryptography==50.0.2
+psycopg[binary]==3.2.13
