@@ -315,3 +315,34 @@ def test_audit_chain_detects_field_tampering(client):
         session.add(first)
         session.commit()
     assert db.verify_audit_chain()["valid"] is False
+
+
+def test_commit_idempotency_replays_exact_receipt_and_rejects_request_mutation(client):
+    h = {"Idempotency-Key": "same-create-request-123"}
+    payload = {"title": "One list", "entries": ["a", "b", "c"], "winners": 1}
+    first = client.post("/api/v2/draws", json=payload, headers=h)
+    second = client.post("/api/v2/draws", json=payload, headers=h)
+    assert first.status_code == 200 and second.status_code == 200
+    assert second.json() == first.json()
+    mutated = client.post("/api/v2/draws", json={**payload, "title": "Other"}, headers=h)
+    assert mutated.status_code == 422
+    from app import db
+    assert db.draws_today(db.get_draw(first.json()["draw_id"]).owner_id) == 1
+
+
+def test_run_idempotency_replays_winners_and_never_reseeds(client):
+    creation = client.post("/api/v2/draws", json={
+        "title": "RunOnce", "entries": ["a", "b", "c"], "winners": 1}).json()
+    url = f"/api/v2/draws/{creation['draw_id']}/run"
+    h = {"Idempotency-Key": "same-run-request-456"}
+    first = client.post(url, headers=h)
+    assert first.status_code == 200
+    second = client.post(url, headers=h)
+    assert second.status_code == 200 and second.json() == first.json()
+    assert client.post(url).status_code == 409
+
+
+def test_idempotency_requires_safe_token_characters(client):
+    payload = {"title": "Check", "entries": ["a", "b"], "winners": 1}
+    assert client.post("/api/v2/draws", json=payload,
+                       headers={"Idempotency-Key": "a"}).status_code == 422
