@@ -104,6 +104,11 @@ Cases that need no action:
   can't reveal draws that were never issued. Planned mitigation: commit to a seed hash in the `draw_commit`
   receipt and derive the final seed from it together with a future public beacon round (drand), fixed at
   commit time, so neither party controls the outcome.
+- The operator can still choose when to run a draw, withhold a completed result, or omit it from what they
+  publish. Receipts make tampering with a published result detectable; they don't force publication.
+- The audit log's hash chain detects edits and deletions, but an attacker who can rewrite the whole chain (and
+  the database) could forge a consistent history. External signed checkpoints (an anchored transparency log)
+  are a V3 item.
 - Seed provenance (which quantum sources contributed) is operator-asserted, as for all receipts.
 - This is not a certified RNG. It must not be used for regulated gambling or lotteries (GLI-19 and similar
   require lab certification).

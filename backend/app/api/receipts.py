@@ -30,7 +30,7 @@ from ..auth import CurrentUser, optional_user
 from ..config import Settings, get_settings
 from ..generator import SELECTION_ALGORITHM, select_winners
 from ..ratelimit import DRAWS_PER_USER_PER_DAY, general_limit, limiter
-from ..receipts import build_receipt, check_commitment, verify_receipt
+from ..receipts import SIGNING_DOMAIN, build_receipt, canonical, check_commitment, verify_receipt
 from .deps import get_entropy, get_keyring, get_signer
 
 router = APIRouter()
@@ -93,6 +93,23 @@ async def get_receipt(request: Request, receipt_id: str) -> dict[str, Any]:
     if r is None:
         raise HTTPException(404, "Receipt not found")
     return r
+
+
+@router.get("/api/v2/receipts/{receipt_id}/verify-material", response_model=None)
+@limiter.limit(general_limit)
+async def receipt_verify_material(request: Request, receipt_id: str) -> dict[str, Any]:
+    """Everything an independent verifier needs, byte-exact: the stored canonical payload (Python float formatting
+    such as `128.0` can't be reproduced by JSON.stringify), the signing domain and the signing key's public entry.
+    The key comes from this server too: compare its key_id with a copy of the key set you trust."""
+    if not RECEIPT_ID.match(receipt_id):
+        raise HTTPException(404, "Receipt not found")
+    r = await run_in_threadpool(db.get_receipt, receipt_id)
+    if r is None:
+        raise HTTPException(404, "Receipt not found")
+    key = get_keyring(request).get(r["payload"].get("key_id"))
+    return {"receipt": r, "canonical_payload": canonical(r["payload"]).decode(),
+            "signing_domain": SIGNING_DOMAIN.decode(), "public_key": key,
+            "trust": "server-published key; not an independent attestation of quantum origin"}
 
 
 class ReceiptIn(BaseModel):

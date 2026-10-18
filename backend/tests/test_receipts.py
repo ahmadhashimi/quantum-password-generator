@@ -11,7 +11,7 @@ from app.receipts import Signer, build_receipt, canonical, check_commitment, ver
 from tests.conftest import FakeProvider
 
 PROV = {"sources": ["lfd"], "quantum": True, "quantum_bytes": 64, "mixed_with": "os_csprng",
-        "health": {"sp800_90b": "pass"}}
+        "health": {"sp800_90b_style": "pass"}}
 
 
 @pytest.fixture
@@ -246,3 +246,19 @@ def test_signatures_are_domain_separated():
     pub = Ed25519PublicKey.from_public_bytes(unb64(s.public_keys()["ed25519"]))
     with pytest.raises(InvalidSignature):
         pub.verify(unb64(receipt["signatures"]["ed25519"]), canonical(receipt["payload"]))
+
+
+def test_verify_material_is_byte_exact_including_python_floats(client):
+    """Ported from the parallel feature/v2.1 branch: browsers can't rebuild `256.0` from JSON.parse output."""
+    from app.receipts import SIGNING_DOMAIN, canonical, verify_signatures
+
+    receipt = client.get("/api/v2/random", params={"bytes": 32, "receipt": True}).json()["receipt"]
+    rid = receipt["payload"]["receipt_id"]
+    m = client.get(f"/api/v2/receipts/{rid}/verify-material").json()
+    assert m["canonical_payload"] == canonical(receipt["payload"]).decode()
+    assert '"entropy_bits":256.0' in m["canonical_payload"]
+    assert m["signing_domain"].encode() == SIGNING_DOMAIN
+    assert all(verify_signatures(receipt["payload"], receipt["signatures"], m["public_key"]).values())
+    assert "not an independent attestation" in m["trust"]
+    assert client.get("/api/v2/receipts/../verify-material").status_code == 404
+    assert client.get("/api/v2/receipts/AAAAAAAAAAAAAAAA/verify-material").status_code == 404

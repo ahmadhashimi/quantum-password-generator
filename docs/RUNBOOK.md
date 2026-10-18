@@ -93,7 +93,7 @@ It exits non-zero on any failure. Keep the output of the last run with the relea
 2. `docker compose up -d postgres`, then
    `docker compose exec -T postgres pg_restore -U qpg -d qpg --clean --if-exists < qpg-<ts>.dump`.
 3. Restore the signing key:
-   `docker compose run --rm api python -m scripts.keys restore --in /backups/signing-key-<id>.qpgkey --key-file /data/signing_key.json`.
+   `docker compose run --rm api python -m scripts.keys restore --in /backups/signing-key-<id>.qpgkey --key-file /data/signing_keys.json`.
 4. `docker compose up -d`. At startup the API checks migrations, flags interrupted draws and records
    `key.loaded`.
 5. Run `deploy/smoke.sh`, then confirm `/api/v2/admin/audit/verify` returns `ok`.
@@ -115,8 +115,8 @@ The signing key is the root of every receipt's integrity. Its public half is ser
 **Routine rotation** (yearly, or when an operator with access leaves):
 
 ```bash
-python -m scripts.keys backup --key-file data/signing_key.json --out old-key.qpgkey   # keep offline
-python -m scripts.keys rotate --key-file data/signing_key.json                        # prints RETIRED_SIGNING_KEYS
+python -m scripts.keys backup --key-file data/signing_keys.json --out old-key.qpgkey   # keep offline
+python -m scripts.keys rotate --key-file data/signing_keys.json                        # prints RETIRED_SIGNING_KEYS
 # set RETIRED_SIGNING_KEYS to the printed JSON in deploy/.env, restart the api
 ```
 

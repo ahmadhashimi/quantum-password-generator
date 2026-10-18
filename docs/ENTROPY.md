@@ -32,7 +32,7 @@ per request: 64 B from pool (signed-in users, quota) + 64 B from one live QRNG (
 | A2 | Raw IBM QPU bits carry ≥ 2 bits of min-entropy per byte despite readout bias and crosstalk | `RAW_MIN_ENTROPY` in `backend/app/entropy/ibm.py` | **Assumed**, deliberately conservative; not an SP 800-90B §6 estimate on our data |
 | A3 | SHA-256 truncated to 16 bytes over each 64 raw bytes extracts the raw min-entropy | `condition()` in `backend/app/entropy/mixer.py` | At A2's 2 bits/byte, 64 raw bytes carry 128 bits, and 16 output bytes need 128: a 1:1 claim with **no safety margin**. SP 800-90B §3.1.5 would only credit *full* entropy with 64 extra input bits. We do not claim the conditioned IBM bytes are full-entropy |
 | A4 | `os.urandom` is a sound CSPRNG | `derive_key()` in `mixer.py` | Standard assumption; Linux `getrandom(2)` |
-| A5 | HKDF-SHA512 extracts a uniform key if *either* input has enough min-entropy (≥ 256 bits) | `derive_key()` | Standard extractor assumption (HMAC as a randomness extractor, RFC 5869 §3). This is why output is never weaker than the OS CSPRNG alone |
+| A5 | HKDF-SHA512 extracts a uniform key if *either* input has enough min-entropy (≥ 256 bits) | `derive_key()` | Standard extractor assumption (HMAC as a randomness extractor, RFC 5869 §3). This is why, under these assumptions, output should not fall below the OS CSPRNG baseline |
 | A6 | HMAC-SHA512 in counter mode is a secure PRF-based generator for one request's output | `KeyStream` in `mixer.py` | Sound construction, but **not** SP 800-90A HMAC_DRBG (no reseed or prediction-resistance machinery). Each stream lives for one request |
 | A7 | Rejection sampling yields uniform indexes | `uniform_index()` in `backend/app/generator.py` | Exact: values ≥ ⌊2^(8k)/n⌋·n are rejected, so there is no modulo bias. Tested |
 | A8 | A source that fails a health test contributes nothing to that request | `_refill()` in `service.py` | Enforced and tested. Failing batches are dropped and the circuit breaker opens after 3 failures |
@@ -58,13 +58,21 @@ results we received over the network, not on the hardware.
 monobit, runs, chi-square) over a few KB per source. It is a smoke test, not the SP 800-22 or SP 800-90B
 estimator suites, and it is not run on megabytes of data.
 
-## Why a bad quantum source can't weaken output
+## Why a bad quantum source shouldn't weaken output
 
-Every request mixes `os.urandom(64)` into HKDF (A4, A5). If a QRNG were broken, biased, or controlled by
-an attacker who does not also control the server's kernel RNG, the output would still be as strong as the
-OS CSPRNG alone. The quantum input adds defence in depth against a weak local RNG, plus provenance. It is
+Every request mixes `os.urandom(64)` into HKDF (A4, A5). Assuming the OS CSPRNG is secure and HKDF/HMAC
+behave as modelled, a QRNG that is broken, biased, or controlled by an attacker who does not also control the
+server's kernel RNG should not reduce output unpredictability below the OS CSPRNG baseline. This is a
+conditional engineering argument, not a mathematical guarantee under a compromised host or implementation
+faults. The quantum input adds defence in depth against a weak local RNG, plus provenance. It is
 never the sole source of security. If every quantum source is down, requests are served from the OS CSPRNG
 and labelled `["os_csprng"]`, `quantum: false`.
+
+## What `entropy_bits` means
+
+`entropy_bits` in a response or receipt is log2 of the size of the output space the secret was sampled from
+uniformly (for a password: the character classes and length chosen, accounting for "require each class"). It is
+**not** a measurement of qubit min-entropy, and not a certification of output randomness.
 
 ## Provenance accounting
 
@@ -110,6 +118,9 @@ When the IBM budget or pool runs out, the order is: IBM pool → ANU → LfD →
 labelled in the response and receipt, and none of them blocks generation.
 
 ## Known follow-ups
+
+- Commission an independent cryptographic design review of the mixing, conditioning and receipt scheme before
+  a public launch.
 
 - Run SP 800-90B §6 non-IID estimators (e.g. NIST's `SP800-90B_EntropyAssessment`) on ≥ 1,000,000 raw IBM
   samples per backend, and replace A2 with a measured, documented value.

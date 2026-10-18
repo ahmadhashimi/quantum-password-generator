@@ -46,8 +46,9 @@ class Provenance:
             "mixed_with": "os_csprng",
             # Public responses carry coarse failure codes only; raw provider errors can leak account details.
             "failures": {name: "unavailable" for name in self.failures},
-            # Every contributing source passed SP 800-90B RCT + APT; failing sources are excluded above.
-            "health": {"sp800_90b": "pass" if self.sources != ["os_csprng"] else "n/a"},
+            # Every contributing source passed our RCT/APT screening (modelled on SP 800-90B §4.4; not a NIST
+            # validation); failing sources are excluded above. The key name says "style" so no one reads it as one.
+            "health": {"sp800_90b_style": "pass" if self.sources != ["os_csprng"] else "n/a"},
             "timestamp": self.timestamp,
         }
         if self.ibm_jobs:

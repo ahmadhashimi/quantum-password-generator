@@ -9,7 +9,7 @@ from app.receipt_schema import validate_payload
 from app.receipts import EVIDENCE, Keyring, Signer, b64, build_receipt, verify_receipt
 
 PROV = {"sources": ["lfd"], "quantum": True, "quantum_bytes": 64, "mixed_with": "os_csprng",
-        "health": {"sp800_90b": "pass"}}
+        "health": {"sp800_90b_style": "pass"}}
 
 
 @pytest.fixture
