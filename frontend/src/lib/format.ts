@@ -1,6 +1,6 @@
 const SOURCE_LABELS: Record<string, string> = {
   ibm_quantum: "IBM Quantum",
-  ibm_simulator: "IBM simulator (not quantum)",
+  ibm_simulator: "IBM simulator",
   anu: "ANU QRNG",
   lfd: "LfD QRNG",
   os_csprng: "OS CSPRNG",

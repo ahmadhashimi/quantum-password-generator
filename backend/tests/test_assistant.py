@@ -97,7 +97,7 @@ def test_assistant_api_errors_are_friendly():
 def test_message_validation():
     with make_app(FakeAPI((200, {}))) as app_client:
         assert app_client.post("/api/v2/assistant/chat", json={"message": ""}).status_code == 422
-        assert app_client.post("/api/v2/assistant/chat", json={"message": "x" * 4001}).status_code == 422
+        assert app_client.post("/api/v2/assistant/chat", json={"message": "x" * 2001}).status_code == 422
 
 
 def test_assistant_disabled_without_key():
@@ -159,3 +159,25 @@ def test_global_budget_kill_switch():
         events = parse_sse(c.post("/api/v2/assistant/chat", json={"message": "hi"}).text)
     assert api.requests == []  # never reached Anthropic
     assert "budget" in events[1][1]["message"]
+
+
+def test_per_user_dollar_cap():
+    from app import db
+    from app.assistant.agent import Limits
+
+    api = FakeAPI((200, msg([{"type": "text", "text": "Hi"}], "end_turn")))
+    with make_limited_app(api, Limits(user_daily_budget_usd=0.10)) as c:
+        db.record_usage("dev_local", "assistant_message", cost_usd=0.11)
+        events = parse_sse(c.post("/api/v2/assistant/chat", json={"message": "hi"}).text)
+    assert api.requests == [] and "usage limit" in events[1][1]["message"]
+
+
+def test_monthly_budget_cap():
+    from app import db
+    from app.assistant.agent import Limits
+
+    api = FakeAPI((200, msg([{"type": "text", "text": "Hi"}], "end_turn")))
+    with make_limited_app(api, Limits(monthly_budget_usd=5.0, daily_budget_usd=100.0)) as c:
+        db.record_usage("x", "assistant_message", cost_usd=5.0)
+        events = parse_sse(c.post("/api/v2/assistant/chat", json={"message": "hi"}).text)
+    assert api.requests == [] and "month" in events[1][1]["message"]

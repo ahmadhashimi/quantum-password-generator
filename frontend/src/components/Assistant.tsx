@@ -146,7 +146,7 @@ export function Assistant({ open, onClose, needsSignIn }: Props) {
             <input
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              maxLength={4000}
+              maxLength={2000}
               disabled={needsSignIn}
               placeholder="Ask the assistant…"
               aria-label="Message"

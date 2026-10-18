@@ -91,10 +91,20 @@ def assistant_messages_today(user_id: str) -> int:
                                                  UsageEvent.created_at >= _start_of_day())).one()
 
 
-def assistant_spend_today() -> float:
+def assistant_spend(since: datetime, user_id: str | None = None) -> float:
+    q = select(func.coalesce(func.sum(UsageEvent.cost_usd), 0.0)).where(UsageEvent.created_at >= since)
+    if user_id is not None:
+        q = q.where(UsageEvent.user_id == user_id)
     with Session(engine()) as s:
-        return float(s.exec(select(func.coalesce(func.sum(UsageEvent.cost_usd), 0.0))
-                            .where(UsageEvent.created_at >= _start_of_day())).one())
+        return float(s.exec(q).one())
+
+
+def assistant_spend_today(user_id: str | None = None) -> float:
+    return assistant_spend(_start_of_day(), user_id)
+
+
+def assistant_spend_this_month() -> float:
+    return assistant_spend(_start_of_day().replace(day=1))
 
 
 def user_stats(user_id: str) -> dict:

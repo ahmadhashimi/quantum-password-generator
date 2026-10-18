@@ -40,9 +40,11 @@ class Settings(BaseSettings):
     assistant_model: str = "claude-opus-5-5"
     # Cost guardrails
     assistant_daily_messages_per_user: int = 50
+    assistant_user_daily_budget_usd: float = 0.50  # per-user dollar cap (message caps alone don't bound cost)
     assistant_daily_budget_usd: float = 10.0  # global kill switch: assistant pauses when today's spend hits this
-    assistant_max_tokens: int = 4000
-    assistant_max_tool_iterations: int = 6
+    assistant_monthly_budget_usd: float = 150.0
+    assistant_max_tokens: int = 1500
+    assistant_max_tool_iterations: int = 3
 
     # Clerk
     clerk_secret_key: str | None = None

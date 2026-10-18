@@ -11,7 +11,7 @@ router = APIRouter()
 
 
 class ChatRequest(BaseModel):
-    message: str = Field(min_length=1, max_length=4000)
+    message: str = Field(min_length=1, max_length=2000)
     conversation_id: str | None = Field(default=None, max_length=64)
 
 

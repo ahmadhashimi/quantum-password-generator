@@ -36,7 +36,8 @@ def create_app(settings: Settings | None = None, entropy: EntropyService | None 
             app.state.entropy.harvester.start()
         app.state.assistant = assistant or (
             Assistant(AsyncAnthropic(api_key=s.anthropic_api_key), s.assistant_model, app.state.entropy,
-                      Limits(s.assistant_daily_messages_per_user, s.assistant_daily_budget_usd,
+                      Limits(s.assistant_daily_messages_per_user, s.assistant_user_daily_budget_usd,
+                             s.assistant_daily_budget_usd, s.assistant_monthly_budget_usd,
                              s.assistant_max_tokens, s.assistant_max_tool_iterations))
             if s.assistant_enabled else None)
         yield

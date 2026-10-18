@@ -132,9 +132,11 @@ def _sse(event: str, data: dict) -> str:
 @dataclass
 class Limits:
     daily_messages_per_user: int = 50
+    user_daily_budget_usd: float = 0.50
     daily_budget_usd: float = 10.0
-    max_tokens: int = 4000
-    max_tool_iterations: int = 6
+    monthly_budget_usd: float = 150.0
+    max_tokens: int = 1500
+    max_tool_iterations: int = 3
 
 
 class Assistant:
@@ -146,10 +148,16 @@ class Assistant:
         self.store = ConversationStore()
 
     async def _blocked_reason(self, user_id: str) -> str | None:
-        if await run_in_threadpool(db.assistant_spend_today) >= self.limits.daily_budget_usd:
+        """Check spend caps before calling the model. Password generation is never affected."""
+        lim = self.limits
+        if await run_in_threadpool(db.assistant_spend_this_month) >= lim.monthly_budget_usd:
+            return "The assistant has reached this month's usage budget."
+        if await run_in_threadpool(db.assistant_spend_today) >= lim.daily_budget_usd:
             return "The assistant has reached today's usage budget. Please try again tomorrow."
-        if await run_in_threadpool(db.assistant_messages_today, user_id) >= self.limits.daily_messages_per_user:
-            return f"You've reached today's limit of {self.limits.daily_messages_per_user} assistant messages."
+        if await run_in_threadpool(db.assistant_spend_today, user_id) >= lim.user_daily_budget_usd:
+            return "You've reached today's assistant usage limit."
+        if await run_in_threadpool(db.assistant_messages_today, user_id) >= lim.daily_messages_per_user:
+            return f"You've reached today's limit of {lim.daily_messages_per_user} assistant messages."
         return None
 
     def _tools(self, user_id: str | None, outbox: list[dict]) -> list:

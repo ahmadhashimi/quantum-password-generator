@@ -32,7 +32,7 @@ def chi_square_p_ok(counts: Counter, n_bins: int, total: int) -> bool:
     return z < 4.5
 
 
-@pytest.mark.parametrize("n", [2, 10, 79, 89, 200, 7776])
+@pytest.mark.parametrize("n", [2, 10, 79, 89, 200, 7762])
 def test_uniform_index_is_unbiased(n):
     s = stream()
     total = 60 * n if n < 1000 else 300_000
@@ -73,11 +73,12 @@ def test_entropy_matches_bruteforce_count():
 
 
 def test_passphrase():
-    assert len(wordlist()) == 7776
+    wl = wordlist()
+    assert 7700 < len(wl) < 7776 and "douche" not in wl and len(set(wl)) == len(wl)
     phrase, bits = generate_passphrase(stream(), 6, "-", capitalize=True, add_number=True)
     parts = phrase.split("-")
     assert len(parts) == 7 and parts[-1].isdigit() and all(p[0].isupper() for p in parts[:-1])
-    assert bits == pytest.approx(6 * math.log2(7776) + math.log2(100))
+    assert bits == pytest.approx(6 * math.log2(len(wl)) + math.log2(100))
 
 
 def test_keystream_deterministic_and_unbounded():

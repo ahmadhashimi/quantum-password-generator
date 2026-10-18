@@ -76,10 +76,13 @@ def generate_password(stream: KeyStream, o: PasswordOptions) -> tuple[str, float
 
 @lru_cache
 def wordlist() -> tuple[str, ...]:
-    words = (Path(__file__).parent / "data" / "eff_large_wordlist.txt").read_text().split()
+    """EFF large wordlist minus a small denylist. Entropy is computed from the filtered length."""
+    data = Path(__file__).parent / "data"
+    words = (data / "eff_large_wordlist.txt").read_text().split()
     if len(words) != 7776:
         raise RuntimeError("EFF wordlist is corrupted")
-    return tuple(words)
+    excluded = {w for w in (data / "wordlist_exclude.txt").read_text().split("\n") if w and not w.startswith("#")}
+    return tuple(w for w in words if w not in excluded)
 
 
 def generate_passphrase(stream: KeyStream, words: int, separator: str = "-", capitalize: bool = False,

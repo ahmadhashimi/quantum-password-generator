@@ -3,7 +3,7 @@ import { crackTime, sourceLabel, strengthFromBits } from "./format";
 describe("format", () => {
   it("labels sources honestly", () => {
     expect(sourceLabel("ibm_quantum")).toBe("IBM Quantum");
-    expect(sourceLabel("ibm_simulator")).toContain("not quantum");
+    expect(sourceLabel("ibm_simulator")).toBe("IBM simulator");
   });
 
   it("buckets strength by entropy", () => {

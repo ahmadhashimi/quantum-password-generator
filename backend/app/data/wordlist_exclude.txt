@@ -1,0 +1,15 @@
+# Words removed from the EFF list for a professional product (slurs, body-shaming, sexual or loaded terms).
+autistic
+chubby
+deranged
+disabled
+disfigure
+douche
+feminism
+grope
+lunacy
+lusty
+negligee
+racism
+thong
+unwed
