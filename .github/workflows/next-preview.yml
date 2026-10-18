@@ -21,10 +21,15 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "22"
-      - run: npm ci --no-fund --no-audit
+      - run: npm install --no-fund --no-audit
       - run: npm run typecheck
       - run: npm run build
       - run: npm audit --omit=dev --audit-level=high
+      - name: Candidate lockfile for cryptographic dependencies
+        run: |
+          echo 'CANDIDATE_LOCK_START'
+          cat package-lock.json
+          echo 'CANDIDATE_LOCK_END'
       - name: Build isolated Next.js Docker image
         run: docker build --file Dockerfile --tag quantumpass-web-preview .
       - name: Validate preview Compose topology
