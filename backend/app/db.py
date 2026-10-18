@@ -99,11 +99,14 @@ def append_audit(session: Session, *, actor: str, action: str, target: str, deta
         # init_db seeds this row before requests begin.
         raise RuntimeError("audit head is missing")
     prior = head.last_hash
-    body = json.dumps({"actor": actor, "action": action, "target": target,
-                       "details": details or {}}, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    timestamp = _now()
+    detail_json = json.dumps(details or {}, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    body = json.dumps({"ts": timestamp.replace(tzinfo=None).isoformat(), "actor": actor,
+                       "action": action, "target": target, "details": json.loads(detail_json)},
+                      sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     digest = hashlib.sha256((prior + body).encode("utf-8")).hexdigest()
-    session.add(AuditEvent(actor=actor, action=action, target=target, details=body,
-                           previous_hash=prior, hash=digest))
+    session.add(AuditEvent(timestamp=timestamp, actor=actor, action=action, target=target,
+                           details=detail_json, previous_hash=prior, hash=digest))
     head.last_hash = digest
     session.add(head)
 
@@ -114,7 +117,11 @@ def verify_audit_chain() -> dict:
     with Session(engine()) as session:
         rows = session.exec(select(AuditEvent).order_by(AuditEvent.id)).all()
         for event in rows:
-            expected = hashlib.sha256((previous + event.details).encode("utf-8")).hexdigest()
+            body = json.dumps({"ts": event.timestamp.replace(tzinfo=None).isoformat(),
+                               "actor": event.actor, "action": event.action, "target": event.target,
+                               "details": json.loads(event.details)}, sort_keys=True,
+                              separators=(",", ":"), ensure_ascii=False)
+            expected = hashlib.sha256((previous + body).encode("utf-8")).hexdigest()
             if event.previous_hash != previous or event.hash != expected:
                 return {"valid": False, "first_broken_event_id": event.id}
             previous = event.hash
@@ -390,3 +397,11 @@ def draw_for_receipt(receipt_id: str) -> "Draw | None":
     with Session(engine()) as s:
         return s.exec(select(Draw).where((Draw.commit_receipt_id == receipt_id) |
                                          (Draw.result_receipt_id == receipt_id))).first()
+
+def audit_events_recent(limit: int = 100) -> list[dict]:
+    """Admin-only query. Never put plaintext credentials in audit details."""
+    with Session(engine()) as session:
+        rows = session.exec(select(AuditEvent).order_by(AuditEvent.id.desc()).limit(min(limit, 100))).all()
+        return [{"id": e.id, "timestamp": e.timestamp.isoformat(), "actor": e.actor,
+                 "action": e.action, "target": e.target, "details": json.loads(e.details),
+                 "hash": e.hash, "previous_hash": e.previous_hash} for e in rows]
