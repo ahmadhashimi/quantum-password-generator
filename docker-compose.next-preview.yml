@@ -1,4 +1,5 @@
-# Non-production preview. Does not replace docker-compose.yml; Postgres migration is pending.
+# Non-production preview. Does not replace production Compose or migrate existing SQLite records.
+# Dedicated Postgres volume; migrations and restore rehearsal are required before release.
 services:
   api:
     build:
@@ -10,7 +11,7 @@ services:
       ALLOWED_HOSTS: '["${DOMAIN}", "localhost"]'
       ALLOWED_ORIGINS: '["https://${DOMAIN}"]'
       CLERK_HOSTS: '["https://clerk.${DOMAIN}"]'
-      DATABASE_URL: sqlite:////data/qpg.db
+      DATABASE_URL: postgresql+psycopg://quantumpass:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/quantumpass
       POOL_PATH: /data/entropy_pool.bin
       SIGNING_KEY_PATH: /data/signing_keys.json
       FORWARDED_ALLOW_IPS: 10.89.0.2
@@ -21,9 +22,28 @@ services:
     cap_drop: [ALL]
     expose: ["8000"]
     restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
     networks:
       internal:
         ipv4_address: 10.89.0.3
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: quantumpass
+      POSTGRES_USER: quantumpass
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    volumes: [postgres-data:/var/lib/postgresql/data]
+    expose: ["5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U quantumpass -d quantumpass"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    networks: [internal]
   web:
     build:
       context: ./web
@@ -61,6 +81,7 @@ networks:
       config:
         - subnet: 10.89.0.0/29
 volumes:
+  postgres-data:
   api-data:
   caddy-data:
   caddy-config:
