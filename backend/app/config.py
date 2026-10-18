@@ -43,7 +43,7 @@ class Settings(BaseSettings):
 
     # Assistant
     anthropic_api_key: str | None = None
-    assistant_model: str = "claude-opus-5-5"
+    assistant_model: str = "claude-haiku-5-5"
     # Cost guardrails
     assistant_daily_messages_per_user: int = 50
     assistant_user_daily_budget_usd: float = 1.00  # per-user dollar cap (message caps alone don't bound cost)
