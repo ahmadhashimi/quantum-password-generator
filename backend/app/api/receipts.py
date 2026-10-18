@@ -22,8 +22,8 @@ from starlette.concurrency import run_in_threadpool
 from .. import db
 from ..auth import CurrentUser, optional_user, require_admin
 from ..config import Settings, get_settings
-from ..generator import draw_winners
 from ..entropy.mixer import KeyStream
+from ..generator import draw_winners
 from ..ratelimit import DRAWS_PER_USER_PER_DAY, general_limit, limiter
 from ..receipts import build_receipt, check_commitment, verify_receipt
 from .deps import get_entropy, get_keyring, get_signer
@@ -254,8 +254,8 @@ async def complete_interrupted_draw(request: Request, draw_id: str,
     try:
         receipt, winners = _calculate_result(draw, get_signer(request))
         await run_in_threadpool(db.finish_draw_tx, draw.id, draw.owner_id, receipt)
-    except (RuntimeError, ValueError, json.JSONDecodeError):
-        raise HTTPException(409, "Cannot safely recover this draw; manual investigation required")
+    except (RuntimeError, ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(409, "Cannot safely recover this draw; manual investigation required") from exc
     return {"winners": winners, "receipt": receipt,
             "verify_url": f"/verify/{receipt['payload']['receipt_id']}"}
 
