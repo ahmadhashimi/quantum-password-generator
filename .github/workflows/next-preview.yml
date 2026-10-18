@@ -25,3 +25,9 @@ jobs:
       - run: npm run typecheck
       - run: npm run build
       - run: npm audit --omit=dev --audit-level=high
+      - name: Build isolated Next.js Docker image
+        run: docker build --file Dockerfile --tag quantumpass-web-preview .
+      - name: Validate preview Compose topology
+        run: |
+          cp ../backend/.env.example ../backend/.env
+          DOMAIN=preview.example.invalid docker compose -f ../docker-compose.next-preview.yml config --quiet
