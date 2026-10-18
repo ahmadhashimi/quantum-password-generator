@@ -22,7 +22,8 @@ from .config import Settings, get_settings
 from .entropy import EntropyService
 from .ratelimit import limiter
 from .receipts import Keyring, Signer
-from .security import BodySizeLimitMiddleware, SecurityHeadersMiddleware, install_log_redaction
+from .security import (BodySizeLimitMiddleware, RequestAuditLoggingMiddleware,
+                       SecurityHeadersMiddleware, install_log_redaction)
 
 
 def create_app(settings: Settings | None = None, entropy: EntropyService | None = None,
@@ -86,6 +87,7 @@ def create_app(settings: Settings | None = None, entropy: EntropyService | None 
                        allow_methods=["GET", "POST", "DELETE"], allow_headers=["Authorization", "Content-Type"])
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=s.allowed_hosts)
     app.add_middleware(SecurityHeadersMiddleware, settings=s)
+    app.add_middleware(RequestAuditLoggingMiddleware)
     if s.environment != "development" and s.auth_enabled and not any(
             "*" not in h and "accounts.dev" not in h for h in s.clerk_hosts):
         logging.getLogger(__name__).warning("CLERK_HOSTS has no production Frontend API host; sign-in will be blocked")
