@@ -30,7 +30,9 @@ function inspect(text: string): { salt: string | undefined; bundledKeys: KeySet 
     const doc = parseJson(text);
     if (!isObject(doc)) return { salt: undefined, bundledKeys: null };
     const bundled = isObject(doc.keys) ? KeySet.safeParse(toPlain(doc.keys)) : null;
-    return { salt: typeof doc.salt === "string" ? doc.salt : undefined, bundledKeys: bundled?.success ? bundled.data : null };
+    // `salt` is what the receipt download saves; `receipt_salt` is what the generation API calls it.
+    const salt = typeof doc.salt === "string" ? doc.salt : typeof doc.receipt_salt === "string" ? doc.receipt_salt : undefined;
+    return { salt, bundledKeys: bundled?.success ? bundled.data : null };
   } catch {
     return { salt: undefined, bundledKeys: null }; // the report explains why the text isn't a receipt
   }

@@ -39,6 +39,8 @@ export interface ProviderView {
   /** Quantum source as the operator reports it. A simulator is never quantum, whatever the flag says. */
   quantum: boolean;
   simulator: boolean;
+  /** The server said the pool is filled by hardware jobs. Unknown is neither hardware nor simulator. */
+  hardware: boolean;
   /** The server's own verdict: only an available source can be used for a request. */
   available: boolean;
   state: StateKey;
@@ -99,6 +101,7 @@ export function describeProvider(p: ProviderStatus): ProviderView {
     name: p.name,
     quantum: p.quantum && !simulator,
     simulator,
+    hardware: p.mode === "hardware" && !simulator,
     available,
     state,
     stateLabel: state === "unknown" ? (p.state && p.state !== "ok" ? titleCase(p.state) : "Unavailable")

@@ -64,3 +64,13 @@ def test_audit_endpoints_need_admin(monkeypatch):
         assert c.get("/api/v2/admin/audit").status_code == 401
         assert c.get("/api/v2/admin/audit/verify").status_code == 401
         assert c.post("/api/v2/admin/draws/AAAAAAAAAAAAAAAA/complete").status_code == 401
+
+
+def test_audit_can_be_read_newest_first(client):
+    for i in range(5):
+        db.audit("tester", f"x.{i}")
+    newest = client.get("/api/v2/admin/audit?order=desc&limit=2").json()["events"]
+    assert [e["action"] for e in newest] == ["x.4", "x.3"]
+    older = client.get(f"/api/v2/admin/audit?order=desc&limit=2&before={newest[-1]['seq']}").json()["events"]
+    assert [e["action"] for e in older] == ["x.2", "x.1"]
+    assert client.get("/api/v2/admin/audit?order=sideways").status_code == 422

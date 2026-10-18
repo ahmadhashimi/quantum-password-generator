@@ -94,3 +94,12 @@ def test_cli_runs_isolated_from_backend_code(issued, tmp_path):
     bad = subprocess.run([sys.executable, "-I", str(SCRIPT), str(tmp_path / "run.json"), str(tmp_path / "keys.json"),
                           "--entries", str(tmp_path / "keys.json")], capture_output=True, text=True, cwd=tmp_path)
     assert bad.returncode == 2
+
+
+def test_cli_rejects_duplicate_keys(issued, tmp_path):
+    text = json.dumps(issued["pw"]["receipt"]).replace('"kind": "password"', '"kind": "password", "kind": "random"')
+    (tmp_path / "dup.json").write_text(text)
+    (tmp_path / "keys.json").write_text(json.dumps(issued["keys"]))
+    out = subprocess.run([sys.executable, "-I", str(SCRIPT), str(tmp_path / "dup.json"), str(tmp_path / "keys.json")],
+                         capture_output=True, text=True)
+    assert out.returncode == 2 and "duplicate keys" in out.stderr

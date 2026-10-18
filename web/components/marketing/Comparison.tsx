@@ -106,7 +106,7 @@ export function Comparison() {
     <Block id="comparison" eyebrow="Comparison" title="An honest comparison"
            description="Where the differences are real, and where QuantumPass is the weaker choice.">
       <p className="mb-2 text-xs text-subtle sm:hidden">Scroll sideways to see every column.</p>
-      <div role="region" aria-labelledby="comparison-title" tabIndex={0}
+      <div role="region" aria-label="Comparison table" tabIndex={0}
            className="overflow-x-auto rounded-lg border border-border">
         <table className="w-full min-w-[56rem] text-left text-sm">
           <caption className="sr-only">

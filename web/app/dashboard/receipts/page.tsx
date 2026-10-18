@@ -1,6 +1,7 @@
 import { ReceiptText } from "lucide-react";
 import type { Metadata } from "next";
 
+import { cursorOf } from "@/components/dashboard/cursor";
 import { Unavailable } from "@/components/dashboard/Notices";
 import { ReceiptsView } from "@/components/dashboard/ReceiptsView";
 import { load } from "@/components/dashboard/load";
@@ -10,12 +11,6 @@ import { MeReceipts } from "@/lib/api/schemas";
 export const metadata: Metadata = { title: "Your receipts" };
 
 const PAGE_SIZE = 25;
-const TIMESTAMP = /^\d{4}-\d{2}-\d{2}T[\d:.]+(?:Z|[+-]\d{2}:\d{2})$/;
-
-/** `before` is a created_at cursor echoed back from the API; anything that isn't a timestamp is ignored. */
-function cursorOf(value: string | string[] | undefined): string | null {
-  return typeof value === "string" && TIMESTAMP.test(value) && !Number.isNaN(Date.parse(value)) ? value : null;
-}
 
 export default async function ReceiptsPage({ searchParams }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;

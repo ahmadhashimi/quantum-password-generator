@@ -15,6 +15,7 @@ const AssistantDrawer = dynamic(() => import("./AssistantDrawer").then((m) => m.
 export function AssistantLauncher() {
   const [config, setConfig] = useState<PublicConfig | null>(null);
   const [open, setOpen] = useState(false);
+  const [used, setUsed] = useState(false); // stays mounted after first use so closing doesn't lose the conversation
   const { signedIn } = useAppAuth();
   useEffect(() => {
     api("/api/v2/config", { schema: PublicConfig }).then(setConfig).catch(() => setConfig(null));
@@ -22,10 +23,11 @@ export function AssistantLauncher() {
   if (!config?.assistant_enabled) return null;
   return (
     <>
-      <Button variant="ghost" size="sm" onClick={() => setOpen(true)} aria-haspopup="dialog">
+      <Button variant="ghost" size="sm" onClick={() => { setOpen(true); setUsed(true); }}
+              aria-haspopup="dialog">
         <Sparkles className="size-4 text-accent-2" aria-hidden /> <span className="hidden sm:inline">Assistant</span>
       </Button>
-      {open && <AssistantDrawer open={open} onClose={() => setOpen(false)}
+      {used && <AssistantDrawer open={open} onClose={() => setOpen(false)}
                                 needsSignIn={config.assistant_requires_sign_in && config.auth_enabled && !signedIn} />}
     </>
   );

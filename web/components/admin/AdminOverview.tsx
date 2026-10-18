@@ -84,7 +84,7 @@ export function AdminOverview({ stats }: { stats: AdminStats }) {
           <Stat icon={<Users aria-hidden />} label="Users" value={count(stats.users)} />
           <Stat icon={<Hash aria-hidden />} label="Total events" value={count(stats.total_events)} />
           <Stat icon={<Atom aria-hidden />} label="Quantum share" value={formatShare(stats.quantum_share)}
-                hint="Events whose receipt reported a quantum source" />
+                hint="Share of usage events the server flagged as quantum-seeded. Operator-reported." />
           <Stat icon={<Coins aria-hidden />} label="AI spend today" value={formatUsd(stats.assistant_cost_today_usd)} />
           <Stat icon={<Coins aria-hidden />} label="AI spend total" value={formatUsd(stats.assistant_cost_usd)} />
         </div>
@@ -103,7 +103,7 @@ export function AdminOverview({ stats }: { stats: AdminStats }) {
       <Block id="providers" title="Entropy sources"
              description="Live operator view of every source. State and availability are telemetry about now, not evidence of a source's contribution to a past receipt.">
         <div className="space-y-3">
-          {(facts.checkedAt !== null || facts.fallback !== null) && (
+          {(facts.quantumAvailable !== null || facts.checkedAt !== null || facts.fallback !== null) && (
             <p className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted">
               <Cpu aria-hidden className="size-4 text-accent" />
               {facts.quantumAvailable !== null && (

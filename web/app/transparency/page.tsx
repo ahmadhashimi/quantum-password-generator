@@ -33,8 +33,8 @@ export default function TransparencyPage() {
       <PageHeader
         eyebrow="Transparency" icon={<ScrollText aria-hidden />}
         title="What is proven, what is asserted, and what is not"
-        description={"Quantum-assisted secrets with post-quantum signed evidence. This page says exactly what that " +
-                     "evidence covers and where it stops."}
+        description={"Secrets mixed from quantum and classical sources, with signed evidence. This page says exactly " +
+                     "what that evidence covers and where it stops."}
         actions={<ButtonLink href="/status" variant="secondary">Live source status</ButtonLink>} />
 
       <DocLayout toc={TOC}>
@@ -62,9 +62,11 @@ export default function TransparencyPage() {
           <KeySetPanel />
           <Prose>
             <p>
-              A key pair is an Ed25519 key and an ML-DSA-65 key (FIPS 204, lattice-based). The <Code>key_id</Code> is the
-              first 16 hex characters of SHA-256 over the two public keys. The post-quantum signature protects a receipt&apos;s
-              integrity against future quantum computers; it says nothing about how a secret was generated.
+              A key pair is an Ed25519 key and an ML-DSA-65 key (the lattice-based algorithm specified in FIPS 204; this
+              implementation is not FIPS validated). The <Code>key_id</Code> is the first 16 hex characters of SHA-256 over
+              the two public keys. Forging a receipt means forging both signatures, so it should stay hard even if a future
+              quantum computer breaks Ed25519, provided ML-DSA holds. The signatures say nothing about how a secret was
+              generated.
             </p>
           </Prose>
           <SubHeading>Rotation and revocation</SubHeading>
@@ -120,8 +122,8 @@ export default function TransparencyPage() {
               </li>
               <li>
                 <strong className="text-fg">Screening.</strong> Every byte from a quantum source goes through a Repetition
-                Count Test and an Adaptive Proportion Test. A failing source is quarantined and the request falls back to the
-                next one.
+                Count Test and an Adaptive Proportion Test. A failing batch is discarded and the request falls back to the
+                next source; repeated failures open a circuit breaker that keeps the source out for a cooldown.
               </li>
               <li>
                 <strong className="text-fg">Mixing.</strong> Each request takes 64 bytes from the IBM pool (signed-in users,
@@ -158,10 +160,13 @@ export default function TransparencyPage() {
           <IbmCapacityTable />
           <Prose>
             <p>
-              One harvest job is a layer of Hadamard gates and a measurement on every qubit. When the IBM budget or pool runs
-              out, the order is <strong className="text-fg">IBM pool, then ANU, then LfD, then the OS CSPRNG alone</strong>.
-              Each step is labelled in the response and the receipt, and none of them blocks generation. Live availability is
-              on the <Link href="/status" prefetch={false} className={link}>source status page</Link>.
+              One harvest job is a layer of Hadamard gates and a measurement on every qubit. Sources add to each other
+              rather than replace each other: a request mixes in the IBM pool (signed-in users, within quota), the first
+              healthy live service (<strong className="text-fg">ANU, then LfD</strong>) and always the OS CSPRNG. When the IBM
+              budget or pool runs out, or no live service is healthy, the request is served with what is left, down to{" "}
+              <strong className="text-fg">the OS CSPRNG alone</strong>. The response and the receipt list the sources that
+              were mixed in, and none of these gaps blocks generation. Live availability is on the{" "}
+              <Link href="/status" prefetch={false} className={link}>source status page</Link>.
             </p>
           </Prose>
 
@@ -264,7 +269,7 @@ export default function TransparencyPage() {
               <li>
                 It records the draw lifecycle (commit, seeded, run, needs investigation, administrator completion), key
                 loads and rotations, entropy-provider trouble and IBM job submissions, budget kill-switch events, denied
-                admin access and account deletions.
+                admin access and account creation, updates and deletions.
               </li>
               <li>
                 Events hold actions, actors, targets and coarse details such as counts, fingerprints and source names. They
@@ -296,7 +301,9 @@ export default function TransparencyPage() {
                 someone else&apos;s job.
               </li>
               <li>
-                The receipt log is server-operated, with no inclusion proofs. The operator can withhold results.
+                The receipt log is server-operated, with no inclusion proofs. The operator can withhold results. Receipts
+                issued without an account are pruned after 30 days (draw receipts are kept), so keep the file of any receipt
+                you may need later; it verifies without this server.
               </li>
               <li>
                 Not NIST, FIPS or GLI certified, and not for regulated gambling or lotteries. Health tests are screening, not
@@ -316,7 +323,8 @@ export default function TransparencyPage() {
                 same IBM job bytes.
               </li>
               <li>
-                The service is a single instance: rate limits, the entropy pool and chat sessions live in process memory.
+                The service is a single instance: rate limits, chat sessions and the live-service buffers live in process
+                memory, and the IBM pool is a file on that instance&apos;s disk.
               </li>
             </BulletList>
           </Prose>

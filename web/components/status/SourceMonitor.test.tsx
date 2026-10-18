@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 
 import type { EntropyStatus, ProviderStatus } from "@/lib/api/schemas";
 
@@ -91,6 +91,22 @@ describe("SourceMonitor", () => {
     expect(screen.queryByText(/Fallback in use/)).not.toBeInTheDocument();
   });
 
+  it("does not announce a quantum source on the server's flag alone", async () => {
+    await renderMonitor(() => json(status({ quantum_available: true, providers: [ANU_COOLDOWN] })));
+    expect(screen.queryByText("Quantum source available")).not.toBeInTheDocument();
+    expect(screen.getByText(/Fallback in use/)).toBeInTheDocument();
+  });
+
+  it("says the IBM pool serves signed-in users only when it is the only quantum source up", async () => {
+    await renderMonitor(() => json(status({ providers: [IBM_HARDWARE, ANU_COOLDOWN] })));
+    const banner = screen.getByText("Quantum source available").closest("div") as HTMLElement;
+    expect(banner).toHaveTextContent("Available now: IBM Quantum.");
+    expect(banner).toHaveTextContent("The IBM pool serves signed-in users only.");
+    cleanup();
+    await renderMonitor(() => json(status({ providers: [IBM_HARDWARE, LFD] })));
+    expect(screen.getByText("Quantum source available").closest("div")).not.toHaveTextContent("signed-in users only");
+  });
+
   it("never labels a source that is not available as contributing or in use", async () => {
     await renderMonitor(() => json(status({ providers: [ANU_COOLDOWN, LFD] })));
     const anu = screen.getByRole("article", { name: "ANU QRNG" });
@@ -127,6 +143,13 @@ describe("SourceMonitor", () => {
     expect(within(card).getByText("Last harvest")).toBeInTheDocument();
     expect(within(card).getByText("1 h ago")).toBeInTheDocument();
     expect(within(card).getByText("2026-10-18 05:28:58 UTC")).toBeInTheDocument();
+  });
+
+  it("does not call a pool hardware when the server did not report its mode", async () => {
+    await renderMonitor(() => json(status({ providers: [{ ...IBM_HARDWARE, mode: undefined }] })));
+    const card = screen.getByRole("article", { name: "IBM Quantum" });
+    expect(within(card).getByText("Mode").nextSibling).toHaveTextContent("Not reported");
+    expect(within(card).queryByText("Hardware")).not.toBeInTheDocument();
   });
 
   it("shows the last success as relative and absolute UTC time", async () => {

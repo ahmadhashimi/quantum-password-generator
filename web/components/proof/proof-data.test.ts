@@ -7,13 +7,16 @@ import {
   browserSignatureState,
   buildEvidence,
   EVIDENCE_FORMAT,
+  evidenceFileName,
   extractReceiptId,
+  failedOnIssueTime,
   findDisagreements,
   fromPlain,
   humanDuration,
   parseEntries,
   payloadView,
   receiptTree,
+  SCRIPT_URL,
   serverSignatureState,
   toVerifyKeys,
   truncateMiddle,
@@ -175,5 +178,26 @@ describe("evidence export", () => {
   it("converts plain data without losing structure or emitting NaN", () => {
     expect(stringifyLossless(fromPlain({ a: [1, 2.5, "x", null, true], b: { c: undefined, d: Number.NaN }, e: 1e21 })))
       .toBe('{"a":[1,2.5,"x",null,true],"b":{"d":null},"e":1e+21}');
+  });
+});
+
+describe("shell-safe names and links", () => {
+  it("names the evidence file after a well-formed receipt ID only", () => {
+    expect(evidenceFileName("3JGdISaLMR84RtF1")).toBe("evidence-3JGdISaLMR84RtF1.json");
+    for (const hostile of ["x; rm -rf ~", "$(reboot)AAAAAAAAAA", "../../etc/passwd", "a b", "", "3JGdISaLMR84RtF1\n"]) {
+      expect(evidenceFileName(hostile)).toBe("evidence-receipt.json");
+    }
+  });
+
+  it("points the offline script at the branch the docs use", () => {
+    expect(SCRIPT_URL).toBe("https://github.com/ahmadhashimi/quantum-password-generator/blob/v2/backend/scripts/verify_receipt.py");
+  });
+
+  it("recognises a failure caused by the issue time and no other", () => {
+    expect(failedOnIssueTime(verified("winner edited"))).toBe(false);
+    expect(failedOnIssueTime(verified("password with commitment"))).toBe(false);
+    const future = verifyReceiptText(vector("password with commitment").text, verifyKeys, { now: 1_000 });
+    expect(future.valid).toBe(false);
+    expect(failedOnIssueTime(future)).toBe(true);
   });
 });

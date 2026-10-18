@@ -44,9 +44,15 @@ export function formatBits(bits: number): string {
   return bits.toLocaleString("en-US", { maximumFractionDigits: 2 });
 }
 
-/** "2026-10-18 06:28:58 UTC" from an ISO timestamp; the input is returned unchanged if it isn't a date. */
+/** A time with no zone designator, which `Date.parse` would read in the viewer's local zone. */
+const NO_ZONE = /T[\d:.]+$/;
+
+/**
+ * "2026-10-18 06:28:58 UTC" from an ISO timestamp; the input is returned unchanged if it isn't a date. The API
+ * stores UTC, so a timestamp without a zone is UTC too.
+ */
 export function formatIso(iso: string): string {
-  const ms = Date.parse(iso);
+  const ms = Date.parse(NO_ZONE.test(iso) ? `${iso}Z` : iso);
   return Number.isNaN(ms) ? iso : formatUnix(ms / 1000);
 }
 

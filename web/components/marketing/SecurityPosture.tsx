@@ -59,7 +59,7 @@ export function SecurityPosture() {
         No FIPS, FedRAMP, GLI-19, or independently attested quantum-origin certification is claimed.
       </Callout>
       <div className="mt-6">
-        <Table>
+        <Table className="min-w-[36rem]">
           <caption className="sr-only">Security posture by area, with status and detail</caption>
           <thead>
             <tr>

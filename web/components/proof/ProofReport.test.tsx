@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { isObject, parseJson, stringifyLossless } from "@/lib/verify/json";
 import { verifyReceiptText } from "@/lib/verify/verify";
 
+import { LogCard } from "./LogCard";
 import { ProofReport } from "./ProofReport";
 import { toVerifyKeys } from "./proof-data";
 import { BAD_SIGNATURE, bareReceipt, keys, serverVerdict, vector } from "./test-utils";
@@ -86,6 +87,61 @@ describe("verdict and integrity", () => {
   });
 });
 
+describe("what the verdict claims", () => {
+  const text = vector("password with commitment").text;
+
+  it("reports integrity, provenance and quantum evidence as three separate classes next to the headline", () => {
+    renderReport(text);
+    const classes = within(screen.getByRole("list", { name: "Evidence classes, reported separately" }));
+    expect(classes.getByText("Integrity: valid")).toBeInTheDocument();
+    expect(classes.getByText("Provenance: operator-asserted")).toBeInTheDocument();
+    expect(classes.getByText("Quantum evidence: none")).toBeInTheDocument();
+  });
+
+  it("does not call the provenance of an invalid receipt operator-asserted", () => {
+    renderReport(vector("winner edited").text);
+    const classes = within(screen.getByRole("list", { name: "Evidence classes, reported separately" }));
+    expect(classes.getByText("Integrity: invalid")).toBeInTheDocument();
+    expect(classes.getByText("Provenance: not authenticated")).toBeInTheDocument();
+    expect(classes.queryByText("Provenance: operator-asserted")).not.toBeInTheDocument();
+  });
+
+  it("shows no classes when nothing could be read from the document", () => {
+    renderReport("<html>not a receipt</html>");
+    expect(screen.queryByRole("list", { name: "Evidence classes, reported separately" })).not.toBeInTheDocument();
+  });
+
+  it("says a valid result against the site's published keys rests on those keys", () => {
+    renderReport(text);
+    expect(screen.getByText(/under a published, unrevoked key\. That proves what this server signed/)).toBeInTheDocument();
+  });
+
+  it("does not say the key was published when it came from the file itself", () => {
+    renderReport(text, { keySource: "bundled" });
+    expect(screen.getByRole("heading", { name: "Valid receipt" })).toBeInTheDocument();
+    expect(screen.getByText(/under the key bundled in your file/)).toBeInTheDocument();
+    expect(screen.getByText(/self-consistent, not that the issuer signed it/)).toBeInTheDocument();
+    expect(screen.queryByText(/under a published, unrevoked key/)).not.toBeInTheDocument();
+  });
+
+  it("suggests checking the device clock when the issue time is in the future", () => {
+    vi.useFakeTimers({ toFake: ["Date"], now: new Date("2020-01-01T00:00:00Z") });
+    try {
+      renderReport(text);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(screen.getByRole("heading", { name: "Invalid receipt" })).toBeInTheDocument();
+    expect(screen.getAllByText(/issued_at is not a past unix time/).length).toBeGreaterThan(0);
+    expect(screen.getByText(/check that your device's clock is correct/)).toBeInTheDocument();
+  });
+
+  it("does not mention the clock for a receipt that fails for another reason", () => {
+    renderReport(vector("winner edited").text);
+    expect(screen.queryByText(/device's clock/)).not.toBeInTheDocument();
+  });
+});
+
 describe("server verdict beside the browser's", () => {
   it("shows both verdicts and no warning when they agree", () => {
     renderReport(vector("password with commitment").text, {
@@ -143,6 +199,26 @@ describe("server verdict beside the browser's", () => {
   });
 });
 
+describe("receipt log", () => {
+  it("is titled as the server's own log, not a transparency log", () => {
+    renderReport(vector("password with commitment").text);
+    expect(screen.getByRole("heading", { name: "Receipt log (server-operated)" })).toBeInTheDocument();
+    expect(screen.queryByText("Public log")).not.toBeInTheDocument();
+  });
+
+  it.each(["../admin", "short", "x/../../y", "3JGdISaLMR84RtF1/extra", ""])(
+    "links a lookup only for a well-formed receipt ID, never for %j", (id) => {
+      render(<LogCard server={idle} receiptId={id} />);
+      expect(screen.queryByRole("link", { name: "Look this receipt up by ID" })).not.toBeInTheDocument();
+      cleanup();
+    });
+
+  it("links a lookup, without prefetching, for a well-formed ID", () => {
+    render(<LogCard server={idle} receiptId="3JGdISaLMR84RtF1" />);
+    expect(screen.getByRole("link", { name: "Look this receipt up by ID" })).toHaveAttribute("href", "/verify/3JGdISaLMR84RtF1");
+  });
+});
+
 describe("secret commitment", () => {
   const c = vector("password with commitment");
   const fill = (value: string, salt: string) => {
@@ -177,6 +253,26 @@ describe("secret commitment", () => {
     expect(screen.getByLabelText("Salt")).toHaveValue(c.salt);
   });
 
+  it("masks the salt too, and shows it only on request", () => {
+    renderReport(c.text, { initialSalt: c.salt });
+    const salt = screen.getByLabelText("Salt");
+    expect(salt).toHaveAttribute("type", "password");
+    const toggle = screen.getByRole("button", { name: "Show salt" });
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(toggle);
+    expect(screen.getByLabelText("Salt")).toHaveAttribute("type", "text");
+    expect(screen.getByRole("button", { name: "Hide salt" })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(screen.getByRole("button", { name: "Hide salt" }));
+    expect(screen.getByLabelText("Salt")).toHaveAttribute("type", "password");
+  });
+
+  it("still checks the commitment while the salt is masked", () => {
+    renderReport(c.text);
+    fill(c.value ?? "", c.salt ?? "");
+    expect(screen.getByLabelText("Salt")).toHaveAttribute("type", "password");
+    expect(screen.getByText("Commitment matches")).toBeInTheDocument();
+  });
+
   it("is not offered for draws", () => {
     renderReport(vector("draw commit").text);
     expect(screen.queryByLabelText("Your value")).not.toBeInTheDocument();
@@ -206,6 +302,13 @@ describe("provenance", () => {
     expect(screen.getByText("OS CSPRNG (via HKDF)")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "How sources are screened" })).toHaveAttribute("href", "/transparency#entropy");
     expect(screen.getByText("Operator-asserted", { selector: "span" })).toBeInTheDocument();
+  });
+
+  it("does not show the reported health screening as a green, verified pass", () => {
+    renderReport(base.text);
+    const badge = screen.getByText("pass", { selector: "span" });
+    expect(badge.className).not.toMatch(/success/);
+    expect(badge.className).toMatch(/text-muted/);
   });
 
   it("shows quantum sources as reported, with the byte count, and never claims independent evidence", () => {
@@ -329,11 +432,19 @@ describe("evidence export", () => {
 
   it("explains the offline check and links to the script and the guide", () => {
     renderReport(vector("password with commitment").text);
-    expect(screen.getByText(/pip install cryptography/)).toBeInTheDocument();
+    expect(screen.getByText(/pip install --upgrade cryptography/)).toBeInTheDocument();
+    expect(screen.getByText(/a recent release of the/)).toBeInTheDocument();
     expect(screen.getByText(/--value "YOUR VALUE" --salt "YOUR SALT"/)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "verify_receipt.py on GitHub" })).toHaveAttribute(
       "href", "https://github.com/ahmadhashimi/quantum-password-generator/blob/v2/backend/scripts/verify_receipt.py");
     expect(screen.getByRole("link", { name: "Offline verification guide" })).toHaveAttribute("href", "/developers#offline");
+  });
+
+  it("names the file after the receipt ID, in the command as well as the download", () => {
+    renderReport(vector("password with commitment").text);
+    const commands = screen.getByText(/pip install --upgrade cryptography/).textContent ?? "";
+    expect(commands).toContain("python verify_receipt.py evidence-hHxivlxc4bcfsTRa.json keys.json");
+    expect(commands).not.toMatch(/[;&|`$(]\s*rm\b/);
   });
 
   it("works from a draw response too, and offers the entries flag for draws", () => {

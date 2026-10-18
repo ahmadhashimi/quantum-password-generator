@@ -48,7 +48,7 @@ export function WhyNow() {
               <h3 className="mt-4 text-lg font-semibold text-fg">{p.title}</h3>
               <p className="mt-2 text-sm leading-relaxed text-muted">{p.body}</p>
               <div className="mt-auto pt-5">
-                <p className="border-t border-border pt-4 text-sm text-subtle">{p.note}</p>
+                <p className="border-t border-border pt-4 text-sm text-muted">{p.note}</p>
               </div>
             </Card>
           </li>

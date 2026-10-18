@@ -65,6 +65,14 @@ describe("describeProvider", () => {
     expect(describeProvider(ibm({ name: "ibm_simulator", quantum: true })).quantum).toBe(false);
   });
 
+  it("calls a pool hardware only when the server says so", () => {
+    expect(describeProvider(ibm({ mode: "hardware" })).hardware).toBe(true);
+    const unknown = describeProvider(ibm({ mode: undefined }));
+    expect([unknown.hardware, unknown.simulator]).toEqual([false, false]);
+    expect(describeProvider(ibm({ name: "ibm_simulator", mode: "simulator" })).hardware).toBe(false);
+    expect(describeProvider(ibm({ name: "ibm_simulator", mode: "hardware" })).hardware).toBe(false);
+  });
+
   it("reports only the coarse error flag", () => {
     expect(describeProvider(live({ error: true })).recentError).toBe(true);
     expect(describeProvider(live({ error: undefined })).recentError).toBe(false);

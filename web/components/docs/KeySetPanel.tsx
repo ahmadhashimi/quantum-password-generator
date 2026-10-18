@@ -132,8 +132,14 @@ export function KeySetPanel() {
           </h3>
           <p className="mt-1 text-sm text-muted">Fetched live from /.well-known/quantumpass-keys.json.</p>
         </div>
-        <Button variant="secondary" size="sm" disabled={view.kind === "loading"}
-                onClick={() => { setView({ kind: "loading" }); void load(); }}>
+        {/* aria-disabled, not disabled: a disabled button would drop keyboard focus mid-reload. */}
+        <Button variant="secondary" size="sm" aria-disabled={view.kind === "loading"}
+                className="aria-disabled:pointer-events-none aria-disabled:opacity-50"
+                onClick={() => {
+                  if (view.kind === "loading") return;
+                  setView({ kind: "loading" });
+                  void load();
+                }}>
           <RefreshCw aria-hidden className="size-3.5" /> Reload
         </Button>
       </div>

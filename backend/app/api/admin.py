@@ -1,6 +1,6 @@
 """Operator endpoints: audit log, chain verification, and recovery of interrupted draws. Admin + recent MFA."""
 
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from starlette.concurrency import run_in_threadpool
@@ -17,8 +17,13 @@ Admin = Annotated[CurrentUser, Depends(require_admin)]
 @router.get("/audit", response_model=None)
 @limiter.limit(general_limit)
 async def audit_events(request: Request, admin: Admin, after: Annotated[int, Query(ge=0)] = 0,
-                       limit: Annotated[int, Query(ge=1, le=500)] = 100) -> dict[str, Any]:
-    return {"events": await run_in_threadpool(db.list_audit, after, limit)}
+                       limit: Annotated[int, Query(ge=1, le=500)] = 100,
+                       order: Literal["asc", "desc"] = "asc",
+                       before: Annotated[int | None, Query(ge=1)] = None) -> dict[str, Any]:
+    """`order=asc` pages forward with `after`; `order=desc` pages back from the newest event with `before`."""
+    events = await run_in_threadpool(lambda: db.list_audit(after, limit, newest_first=order == "desc",
+                                                           before_seq=before))
+    return {"events": events}
 
 
 @router.get("/audit/verify", response_model=None)

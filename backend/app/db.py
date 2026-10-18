@@ -268,10 +268,18 @@ def audit_times(action: str, target: str | None, within_s: float) -> list[float]
     return [(ts if ts.tzinfo else ts.replace(tzinfo=UTC)).timestamp() for ts in rows]
 
 
-def list_audit(after_seq: int = 0, limit: int = 100) -> list[dict[str, Any]]:
+def list_audit(after_seq: int = 0, limit: int = 100, *, newest_first: bool = False,
+               before_seq: int | None = None) -> list[dict[str, Any]]:
+    """Oldest first from `after_seq`, or newest first below `before_seq` (for operators reading recent events)."""
     with session() as s:
-        rows = s.exec(select(AuditEvent).where(AuditEvent.seq > after_seq).order_by(col(AuditEvent.seq))
-                      .limit(min(limit, 500))).all()
+        q = select(AuditEvent)
+        if newest_first:
+            if before_seq is not None:
+                q = q.where(AuditEvent.seq < before_seq)
+            q = q.order_by(col(AuditEvent.seq).desc())
+        else:
+            q = q.where(AuditEvent.seq > after_seq).order_by(col(AuditEvent.seq))
+        rows = s.exec(q.limit(min(limit, 500))).all()
     return [{"seq": r.seq, "ts": r.ts.isoformat(), "actor": r.actor, "action": r.action, "target": r.target,
              "details": json.loads(r.details), "prev_hash": r.prev_hash, "hash": r.hash} for r in rows]
 

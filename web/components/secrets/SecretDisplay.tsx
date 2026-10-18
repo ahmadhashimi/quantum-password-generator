@@ -21,7 +21,7 @@ export function SecretDisplay({ value, placeholder, label = "Generated secret" }
   return (
     <div className="flex items-center gap-2 rounded-lg border border-border-strong bg-surface-sunken p-2 pl-4">
       {/* A plain element, not <output>: that is an implicit live region and screen readers would read the secret. */}
-      <div aria-label={label} data-testid="secret" aria-live="off"
+      <div role="group" aria-label={label} data-testid="secret" aria-live="off"
            className={cn("block min-h-12 flex-1 py-2.5 font-mono text-lg break-all sm:text-xl",
                          value ? "text-fg" : "text-subtle")}>
         {value ? (hidden ? "•".repeat(Math.min(value.length, 32)) : value) : placeholder}

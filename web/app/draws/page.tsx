@@ -6,7 +6,7 @@ import { Callout, PageHeader, Section } from "@/components/ui";
 import { DrawFlow } from "@/components/draws/DrawFlow";
 
 export const metadata: Metadata = {
-  title: "Provably fair draws",
+  title: "Verifiable draws",
   description: "Commit your entry list first, run the draw once, and let anyone check the result against signed receipts.",
 };
 
@@ -34,7 +34,7 @@ const STEPS: { icon: ReactNode; title: string; body: string }[] = [
 export default function DrawsPage() {
   return (
     <Section className="pb-20">
-      <PageHeader eyebrow="Commit, then run" icon={<Dices aria-hidden />} title="Provably fair draws"
+      <PageHeader eyebrow="Commit, then run" icon={<Dices aria-hidden />} title="Verifiable draws"
                   description={"Lock the entry list first, then draw from it exactly once. Two signed receipts let anyone check " +
                                "that the list wasn't swapped and that the winners follow from the published seed."} />
       <ol className="grid gap-3 sm:grid-cols-3" aria-label="How a draw works">

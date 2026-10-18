@@ -23,9 +23,9 @@ export function Hero() {
             Secrets with <span className="text-gradient">evidence you can check yourself</span>
           </h1>
           <p className="mt-6 max-w-2xl text-base text-pretty text-muted sm:text-lg">
-            Quantum-seeded generation from IBM Quantum, ANU and LfD, always mixed with your operating
-            system&apos;s CSPRNG. Post-quantum signed receipts (Ed25519 + ML-DSA-65) that never contain the secret. And
-            an honest evidence model: what is proven, what is only asserted, and what is not available.
+            Generation seeded by IBM Quantum, ANU and LfD whenever one is available, always mixed with your operating
+            system&apos;s CSPRNG. Hybrid post-quantum signed receipts (Ed25519 + ML-DSA-65) that never contain the
+            secret. And an honest evidence model: what is proven, what is only asserted, and what is not available.
           </p>
           <div className="mt-8 flex flex-col gap-3 sm:flex-row">
             <ButtonLink href="/generate" size="lg">

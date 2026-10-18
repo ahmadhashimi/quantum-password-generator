@@ -89,7 +89,7 @@ export function EvidenceModel() {
               </span>
               <Badge tone={col.tone}>{col.badge}</Badge>
             </div>
-            <p className="mt-5 text-xs font-semibold tracking-widest text-subtle uppercase">{col.label}</p>
+            <p className="mt-5 text-xs font-semibold tracking-widest text-muted uppercase">{col.label}</p>
             <h3 id={`evidence-${col.id}`} className="mt-1 text-xl font-semibold text-fg">{col.heading}</h3>
             <ul className="mt-4 space-y-3 text-sm leading-relaxed text-muted">
               {col.items.map((item) => (

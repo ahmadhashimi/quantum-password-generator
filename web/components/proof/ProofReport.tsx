@@ -54,7 +54,7 @@ export function ProofReport({ receiptText, keys, keySource = "published", server
           </p>
         </Callout>
       )}
-      <VerdictCard browser={browser} view={view} server={server} />
+      <VerdictCard browser={browser} view={view} server={server} keySource={keySource} />
       <IntegrityCard browser={browser} server={server} keys={keys} keySource={keySource} material={material}
                      canonicalMatch={canonicalMatch} />
       {view && !verified && (

@@ -47,9 +47,9 @@ export function formatUnix(unixSeconds: number): string {
   return new Date(unixSeconds * 1000).toISOString().replace("T", " ").replace(/\.\d+Z$/, " UTC");
 }
 
-/** Mask a secret for history lists: first 3 and last 2 characters. */
+/** Mask a secret for history lists: only long values show their first and last 2 characters (a recognition hint). */
 export function maskSecret(value: string): string {
-  return value.length <= 6 ? "•".repeat(value.length) : `${value.slice(0, 3)}${"•".repeat(8)}${value.slice(-2)}`;
+  return value.length < 16 ? "•".repeat(Math.min(value.length, 12)) : `${value.slice(0, 2)}${"•".repeat(8)}${value.slice(-2)}`;
 }
 
 export const RECEIPT_ID = /^[A-Za-z0-9_-]{16}$/;

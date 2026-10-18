@@ -98,6 +98,30 @@ describe("KeySetPanel", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
+  it("keeps the Reload button focusable while it reloads, and ignores a second click", async () => {
+    let release: (r: Response) => void = () => undefined;
+    let calls = 0;
+    const spy = vi.spyOn(globalThis, "fetch").mockImplementation(() => {
+      calls += 1;
+      return calls === 1 ? Promise.resolve(json({ keys: [keyEntry(3)] })) : new Promise<Response>((r) => { release = r; });
+    });
+    render(<KeySetPanel />);
+    await screen.findByRole("listitem");
+
+    const reload = screen.getByRole("button", { name: /Reload/ });
+    reload.focus();
+    fireEvent.click(reload);
+    expect(reload).toHaveAttribute("aria-disabled", "true");
+    expect(reload).not.toBeDisabled();
+    expect(reload).toHaveFocus();
+    fireEvent.click(reload);
+    expect(spy).toHaveBeenCalledTimes(2);
+
+    release(json({ keys: [keyEntry(3)] }));
+    await waitFor(() => expect(screen.getByRole("listitem")).toBeInTheDocument());
+    expect(reload).toHaveAttribute("aria-disabled", "false");
+  });
+
   it("treats a response of the wrong shape as an error", async () => {
     spyFetch(() => json({ nothing: true }));
     render(<KeySetPanel />);

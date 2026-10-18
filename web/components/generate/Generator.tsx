@@ -163,6 +163,7 @@ export function Generator() {
   const { getToken } = useAppAuth();
   const history = useSessionHistory();
   const hintId = useId();
+  const panelId = useId();
   const [s, setS] = useState<Settings>(DEFAULTS);
   const [result, setResult] = useState<Generated | null>(null);
   const [loading, setLoading] = useState(false);
@@ -229,7 +230,8 @@ export function Generator() {
                   description="Quantum-seeded when sources are available, always mixed with the OS CSPRNG." />
       <CardBody>
         <form onSubmit={onSubmit} onKeyDown={onKeyDown} noValidate className="space-y-6">
-          <Tabs label="Secret type" value={s.mode} onChange={changeMode} options={[...MODES]} className="w-full" />
+          <Tabs label="Secret type" value={s.mode} onChange={changeMode} options={[...MODES]} className="w-full"
+                controls={panelId} />
 
           <div aria-busy={loading} className="space-y-4">
             <SecretDisplay value={result?.value ?? null} label={`Generated ${noun}`}
@@ -247,7 +249,7 @@ export function Generator() {
             )}
           </div>
 
-          <div role="tabpanel" aria-label={`${MODES.find((m) => m.value === s.mode)?.label} options`}
+          <div id={panelId} role="tabpanel" aria-label={`${MODES.find((m) => m.value === s.mode)?.label} options`}
                className="space-y-5">
             {s.mode === "password" && (
               <>

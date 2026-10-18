@@ -26,8 +26,8 @@ const STEPS: { icon: ReactNode; title: string; tag: string; body: string }[] = [
     title: "Mixed with the OS CSPRNG",
     tag: "HKDF-SHA512 · rejection sampling",
     body: "Quantum bytes and 64 bytes from the operating system's CSPRNG go through HKDF-SHA512, then characters " +
-      "are drawn without modulo bias. If the OS CSPRNG is sound, a broken or hostile quantum source should not push " +
-      "output below that baseline.",
+      "are drawn without modulo bias. Mixing is designed so a bad quantum source adds nothing rather than " +
+      "weakening the result, and that holds only while the OS CSPRNG itself is sound.",
   },
   {
     icon: <FileSignature />,

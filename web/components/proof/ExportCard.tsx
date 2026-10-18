@@ -10,7 +10,9 @@ import { downloadText } from "@/lib/download";
 import type { BrowserVerification } from "@/lib/verify/verify";
 
 import { linkClass, useOrigin } from "./parts";
-import { buildEvidence, isDrawKind, isSecretKind, type Optional, type PayloadView, SCRIPT_URL } from "./proof-data";
+import {
+  buildEvidence, evidenceFileName, isDrawKind, isSecretKind, type Optional, type PayloadView, SCRIPT_URL,
+} from "./proof-data";
 
 /** Section 8: save everything needed to re-check this receipt without this website. */
 export function ExportCard({ view, receiptText, keys, browser, server }: {
@@ -22,7 +24,8 @@ export function ExportCard({ view, receiptText, keys, browser, server }: {
 }) {
   const origin = useOrigin();
   const [saved, setSaved] = useState<"idle" | "saved" | "failed">("idle");
-  const file = `evidence-${view.receiptId}.json`;
+  // `file` lands in a command people copy and paste, so it is built only from a well-formed receipt ID.
+  const file = evidenceFileName(view.receiptId);
 
   function save() {
     const text = buildEvidence({ receiptText, keys, browser, server: server.status === "ok" ? server.data : null,
@@ -41,7 +44,7 @@ export function ExportCard({ view, receiptText, keys, browser, server }: {
       ? `# a draw: also check the published entry list (a JSON array of strings)\npython verify_receipt.py ${file} keys.json --entries entries.json`
       : null;
   const commands = [
-    "pip install cryptography",
+    "pip install --upgrade cryptography",
     `curl -o keys.json ${origin || "https://YOUR-QUANTUMPASS-HOST"}/.well-known/quantumpass-keys.json`,
     `python verify_receipt.py ${file} keys.json`,
     ...(extra ? ["", extra] : []),
@@ -65,8 +68,9 @@ export function ExportCard({ view, receiptText, keys, browser, server }: {
             <Terminal className="size-4 text-accent" aria-hidden /> Verify offline with Python
           </h3>
           <p className="text-sm text-muted">
-            The script needs only Python 3.12+ and the <code className="font-mono text-xs">cryptography</code> package. It
-            is a separate implementation of the published algorithm. Fetch the key set yourself rather than trusting the
+            The script needs only Python 3.12+ and a recent release of the{" "}
+            <code className="font-mono text-xs">cryptography</code> package, one with ML-DSA support. It is a separate
+            implementation of the published algorithm. Fetch the key set yourself rather than trusting the
             keys bundled in the export, and compare the key ID with a copy you trust.
           </p>
           <CodeBlock language="shell" code={commands} />

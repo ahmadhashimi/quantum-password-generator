@@ -30,8 +30,8 @@ function AdminOnly() {
   return (
     <Callout tone="warning" title="Admins only (and a second factor verified in the last hour)">
       <p>
-        This page is for operators. If you are one, verify your second factor again, then reload. Every denied attempt is
-        written to the audit log.
+        This page is for operators. If you are one, verify your second factor again, then reload. Denied attempts are
+        recorded in the audit log.
       </p>
     </Callout>
   );
@@ -58,7 +58,7 @@ export function Unavailable({ result, what, admin = false }: {
   if (result.status === 403 && admin) return <AdminOnly />;
   return (
     <Callout tone="neutral" title="Not available">
-      <p>The API has no {what} for this account.</p>
+      <p>The API has nothing to show for {what}.</p>
     </Callout>
   );
 }

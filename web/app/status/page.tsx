@@ -29,9 +29,10 @@ export default function StatusPage() {
         <div className="space-y-2">
           <h2 id="reading" className="text-xl font-semibold tracking-tight text-fg">Reading this page</h2>
           <p className="max-w-3xl text-[0.95rem] text-pretty text-muted">
-            Each source reports a state. Only a source that is available is used for new requests. When none of the quantum
-            sources is available, requests are served from the OS CSPRNG and labelled not quantum; generation never stops.
-            The fallback order is the IBM pool, then ANU, then LfD, then the OS CSPRNG alone.
+            Each source reports a state. Only a source that is available is used for new requests. A request mixes in the
+            sources that are available: the IBM pool (signed-in users only), the first healthy live service (ANU, then LfD)
+            and always the OS CSPRNG. When none of the quantum sources is available, requests are served from the OS CSPRNG
+            alone and labelled not quantum; generation never stops.
           </p>
         </div>
 

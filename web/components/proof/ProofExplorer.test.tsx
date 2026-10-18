@@ -125,12 +125,24 @@ describe("ProofExplorer", () => {
     expect(screen.getByRole("link", { name: /Commit receipt/ })).toHaveAttribute("href", "/verify/uSu0tjQopFLL3THW");
   });
 
+  it("reports a stored receipt that no longer fits the schema as invalid, not as a load failure", async () => {
+    const r = receiptOf("password with commitment");
+    const doc = JSON.parse(r.text) as { payload: Record<string, unknown> };
+    delete doc.payload.provenance; // the API's own response schema would reject this; the browser verifier explains it
+    serve(r.id, { receipt: () => new Response(JSON.stringify(doc)) });
+    render(<ProofExplorer receiptId={r.id} />);
+    expect(await screen.findByRole("heading", { name: "Invalid receipt" })).toBeInTheDocument();
+    expect(screen.getAllByText(/missing fields: provenance/).length).toBeGreaterThan(0);
+    expect(screen.queryByText("Couldn't load this receipt")).not.toBeInTheDocument();
+  });
+
   it("shows a not-found state for a receipt the server does not have", async () => {
     serve("0000000000000000", { receipt: () => jsonResponse({ detail: "Receipt not found" }, 404) });
     render(<ProofExplorer receiptId="0000000000000000" />);
     expect(await screen.findByRole("heading", { name: "Receipt not found" })).toBeInTheDocument();
     expect(screen.getByText("0000000000000000")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Verify a receipt file" })).toHaveAttribute("href", "/verify");
+    expect(screen.getByText(/pruned after 30 days/)).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Valid receipt" })).not.toBeInTheDocument();
   });
 

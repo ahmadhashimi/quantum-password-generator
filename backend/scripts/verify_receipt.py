@@ -201,6 +201,18 @@ def select_winners(seed: bytes, n_entries: int, winners: int) -> list[int]:
 
 # --- driver ----------------------------------------------------------------------------------------------------
 
+def _no_duplicate_keys(pairs: list[tuple[str, object]]) -> dict:
+    keys = [k for k, _ in pairs]
+    if len(keys) != len(set(keys)):
+        raise ValueError("duplicate keys in JSON (ambiguous: which value was signed?)")
+    return dict(pairs)
+
+
+def load_json(text: str) -> object:
+    """Strict JSON: duplicate keys are rejected, as the browser verifier does."""
+    return json.loads(text, object_pairs_hook=_no_duplicate_keys)
+
+
 def unwrap(doc: dict) -> tuple[dict, dict | None]:
     """Accept a bare receipt, an API response with "receipt", or an evidence export with "keys"."""
     receipt = doc.get("receipt", doc) if isinstance(doc, dict) else doc
@@ -265,7 +277,7 @@ def main(argv: list[str] | None = None) -> int:
     a = ap.parse_args(argv)
     try:
         with open(a.receipt, encoding="utf-8") as f:
-            receipt, bundled_keys = unwrap(json.load(f))
+            receipt, bundled_keys = unwrap(load_json(f.read()))
         if a.keys:
             with open(a.keys, encoding="utf-8") as f:
                 keyset = json.load(f)

@@ -82,7 +82,7 @@ export function HeroReceipt() {
           ))}
         </ul>
         <div className="border-t border-border bg-surface-sunken px-5 py-3">
-          <p className="font-mono text-[0.7rem] break-all text-subtle">
+          <p className="font-mono text-[0.7rem] break-all text-muted">
             commitment = SHA-512(salt ‖ secret). The secret is never in the receipt.
           </p>
         </div>

@@ -12,7 +12,7 @@ export const FOOTER_NAV = [
     title: "Product",
     links: [
       { href: "/generate", label: "Generate" },
-      { href: "/draws", label: "Fair draws" },
+      { href: "/draws", label: "Verifiable draws" },
       { href: "/verify", label: "Proof Explorer" },
       { href: "/pricing", label: "Pricing" },
     ],

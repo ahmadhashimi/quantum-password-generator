@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 
 import { Badge, Callout, Card, CardBody, CardHeader, Skeleton } from "@/components/ui";
 import type { VerifyResult } from "@/lib/api/schemas";
+import { RECEIPT_ID } from "@/lib/format";
 
 import { linkClass } from "./parts";
 import type { Optional } from "./proof-data";
@@ -11,6 +12,8 @@ import type { Optional } from "./proof-data";
 /** Section 6: is this exact receipt in the issuing server's own log? Answered by the server, not by the browser. */
 export function LogCard({ server, receiptId }: { server: Optional<VerifyResult>; receiptId: string | null }) {
   let body: ReactNode;
+  // Only a well-formed ID becomes a path, whatever the caller passes.
+  const lookupId = receiptId !== null && RECEIPT_ID.test(receiptId) ? receiptId : null;
   if (server.status === "loading") {
     body = <Skeleton className="h-16 w-full" />;
   } else if (server.status === "error") {
@@ -19,10 +22,10 @@ export function LogCard({ server, receiptId }: { server: Optional<VerifyResult>;
     body = (
       <Callout tone="neutral" title="Not checked">
         This document was verified only in your browser, so the server&apos;s log wasn&apos;t consulted.
-        {receiptId && (
+        {lookupId && (
           <>
             {" "}
-            <Link href={`/verify/${receiptId}`} prefetch={false} className={linkClass}>Look this receipt up by ID</Link>.
+            <Link href={`/verify/${lookupId}`} prefetch={false} className={linkClass}>Look this receipt up by ID</Link>.
           </>
         )}
       </Callout>
@@ -40,7 +43,7 @@ export function LogCard({ server, receiptId }: { server: Optional<VerifyResult>;
   }
   return (
     <Card id="log">
-      <CardHeader icon={<ScrollText />} title="Public log"
+      <CardHeader icon={<ScrollText />} title="Receipt log (server-operated)"
                   description="Whether the issuing server's own receipt log holds this exact receipt."
                   action={<Badge tone="warning">Server-operated</Badge>} />
       <CardBody className="space-y-3">

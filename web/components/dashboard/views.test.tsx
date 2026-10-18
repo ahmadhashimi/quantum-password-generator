@@ -129,7 +129,7 @@ describe("OverviewView", () => {
   it("links to the generator, draws and verifier, and to operations only for admins", () => {
     const { rerender } = render(<OverviewView me={me()} />);
     expect(screen.getByRole("link", { name: /Generate a secret/ })).toHaveAttribute("href", "/generate");
-    expect(screen.getByRole("link", { name: /Run a fair draw/ })).toHaveAttribute("href", "/draws");
+    expect(screen.getByRole("link", { name: /Run a draw/ })).toHaveAttribute("href", "/draws");
     expect(screen.getByRole("link", { name: /Verify a receipt/ })).toHaveAttribute("href", "/verify");
     expect(screen.queryByRole("link", { name: /Operations/ })).not.toBeInTheDocument();
 

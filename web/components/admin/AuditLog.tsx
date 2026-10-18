@@ -123,8 +123,8 @@ export function AuditLog() {
   }, []);
 
   const fetchPage = useCallback(
-    (after: number, signal?: AbortSignal) =>
-      api("/api/v2/admin/audit", { schema: AuditList, query: { after, limit: PAGE_SIZE }, getToken,
+    (before: number | undefined, signal?: AbortSignal) =>
+      api("/api/v2/admin/audit", { schema: AuditList, query: { order: "desc", before, limit: PAGE_SIZE }, getToken,
                                    ...(signal ? { signal } : {}) }).then((r) => r.events),
     [getToken],
   );
@@ -132,7 +132,7 @@ export function AuditLog() {
   useEffect(() => {
     if (!loaded) return;
     const controller = new AbortController();
-    fetchPage(0, controller.signal).then(
+    fetchPage(undefined, controller.signal).then(
       (page) => {
         if (controller.signal.aborted) return;
         setEvents(page);
@@ -159,10 +159,10 @@ export function AuditLog() {
   }
 
   async function loadMore() {
-    const after = events[events.length - 1]?.seq ?? 0;
+    const before = events[events.length - 1]?.seq;
     setMore({ status: "loading" });
     try {
-      const page = await fetchPage(after);
+      const page = await fetchPage(before);
       if (!alive.current) return;
       setEvents((prev) => [...prev, ...page]);
       setHasMore(page.length === PAGE_SIZE);
@@ -192,9 +192,9 @@ export function AuditLog() {
   const badSeq = verification.status === "done" && !verification.result.ok ? verification.result.first_bad_seq : null;
 
   return (
-    <Card id="audit">
+    <Card id="audit" className="scroll-mt-20">
       <CardHeader icon={<ScrollText />} title="Audit log"
-                  description="An append-only, hash-chained record of operator-relevant actions, oldest first. It is operated by this server: it is not an externally anchored transparency log." />
+                  description="An append-only, hash-chained record of operator-relevant actions, newest first. It is operated by this server: it is not an externally anchored transparency log." />
       <CardBody className="space-y-4">
         <div className="flex flex-wrap gap-2">
           <Button variant="secondary" size="sm" onClick={verifyChain} disabled={verification.status === "running"}>
@@ -244,7 +244,7 @@ export function AuditLog() {
             <div className="flex flex-wrap items-center justify-between gap-3">
               <p className="text-sm text-muted" aria-live="polite">
                 {events.length.toLocaleString("en-US")} {events.length === 1 ? "entry" : "entries"} loaded
-                {!hasMore && ", end of log"}
+                {!hasMore && ", oldest entry reached"}
               </p>
               {hasMore && (
                 <Button variant="secondary" size="sm" onClick={loadMore} disabled={more.status === "loading"}>

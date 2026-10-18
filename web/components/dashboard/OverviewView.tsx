@@ -55,7 +55,7 @@ export function OverviewView({ me }: { me: Me }) {
                     description="Generated values stay in your browser. Receipts store a salted commitment only." />
         <CardBody className="flex flex-wrap gap-3">
           <ButtonLink href="/generate"><Fingerprint className="size-4" aria-hidden /> Generate a secret</ButtonLink>
-          <ButtonLink href="/draws" variant="secondary"><Dices className="size-4" aria-hidden /> Run a fair draw</ButtonLink>
+          <ButtonLink href="/draws" variant="secondary"><Dices className="size-4" aria-hidden /> Run a draw</ButtonLink>
           <ButtonLink href="/verify" variant="secondary"><FileSearch className="size-4" aria-hidden /> Verify a receipt</ButtonLink>
           {me.is_admin && (
             <ButtonLink href="/admin" variant="secondary"><ShieldCheck className="size-4" aria-hidden /> Operations</ButtonLink>

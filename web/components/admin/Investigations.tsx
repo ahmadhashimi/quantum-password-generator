@@ -37,7 +37,7 @@ function seedSources(provenance: Draw["seed_provenance"]): { sources: string[]; 
 function Fact({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div>
-      <dt className="text-xs font-medium tracking-wide text-subtle uppercase">{label}</dt>
+      <dt className="text-xs font-medium tracking-wide text-muted uppercase">{label}</dt>
       <dd className="mt-1 text-sm text-fg">{children}</dd>
     </div>
   );
@@ -224,9 +224,9 @@ export function Investigations() {
   };
 
   return (
-    <Card id="investigations">
+    <Card id="investigations" className="scroll-mt-20">
       <CardHeader icon={<SearchCheck />} title="Draws needing investigation"
-                  description="A draw lands here when it was interrupted after its outcome was fixed. The seed stays on the server; you only choose whether to publish the result it already determines."
+                  description="A draw lands here when it was interrupted after its outcome was fixed. The seed stays on the server; you only choose whether to publish the result it already determines. Titles and entries are text the organiser supplied, not checked by us."
                   action={
                     <Button variant="ghost" size="sm" onClick={reload} disabled={refreshing}>
                       <RefreshCw className="size-3.5" aria-hidden /> Refresh

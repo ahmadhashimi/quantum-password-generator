@@ -1,14 +1,17 @@
 import { Monitor, Server, ShieldCheck, ShieldX } from "lucide-react";
 import type { ReactNode } from "react";
 
-import { Card, CardBody, Skeleton } from "@/components/ui";
+import { Badge, Card, CardBody, Skeleton } from "@/components/ui";
 import type { VerifyResult } from "@/lib/api/schemas";
 import { cn } from "@/lib/cn";
 import { formatUnix } from "@/lib/format";
 import type { BrowserVerification } from "@/lib/verify/verify";
 
+import type { KeySource } from "./IntegrityCard";
 import { CopyableValue, StateIcon, stateTextClass, Term } from "./parts";
-import { type CheckState, failureSummary, kindLabel, type Optional, type PayloadView, reasonText } from "./proof-data";
+import {
+  type CheckState, failedOnIssueTime, failureSummary, kindLabel, type Optional, type PayloadView, reasonText,
+} from "./proof-data";
 
 function Panel({ icon, title, state, headline, note, loading = false }: {
   icon: ReactNode;
@@ -60,13 +63,36 @@ function ServerPanel({ server }: { server: Optional<VerifyResult> }) {
   }
 }
 
+const NOT_QUANTUM = "not that a quantum device independently attested the entropy.";
+
+/** The three evidence classes side by side, so the green headline is never read as a verdict on all of them. */
+function EvidenceClasses({ valid }: { valid: boolean }) {
+  return (
+    <ul aria-label="Evidence classes, reported separately" className="flex flex-wrap gap-2 pt-1.5">
+      <li>
+        <Badge tone={valid ? "success" : "danger"} icon={<StateIcon state={valid ? "pass" : "fail"} />}>
+          Integrity: {valid ? "valid" : "invalid"}
+        </Badge>
+      </li>
+      <li>
+        <Badge tone="warning" title="Claims the issuing server signed; nothing independent authenticated them">
+          Provenance: {valid ? "operator-asserted" : "not authenticated"}
+        </Badge>
+      </li>
+      <li><Badge tone="neutral">Quantum evidence: none</Badge></li>
+    </ul>
+  );
+}
+
 /** Section 1: the verdict, and the browser's result next to (never replaced by) the server's. */
-export function VerdictCard({ browser, view, server }: {
+export function VerdictCard({ browser, view, server, keySource = "published" }: {
   browser: BrowserVerification;
   view: PayloadView | null;
   server: Optional<VerifyResult>;
+  keySource?: KeySource;
 }) {
   const valid = browser.valid;
+  const bundled = keySource === "bundled";
   const Icon = valid ? ShieldCheck : ShieldX;
   return (
     <Card id="verdict">
@@ -83,10 +109,16 @@ export function VerdictCard({ browser, view, server }: {
             </h2>
             <p className="text-sm text-muted">
               {valid
-                ? "Both signatures verify over the receipt's exact bytes under a published, unrevoked key. That proves " +
-                  "what this server signed, not that a quantum device independently attested the entropy."
-                : `${failureSummary(browser)}. Treat this document as unverified.`}
+                ? bundled
+                  ? "Both signatures verify over the receipt's exact bytes under the key bundled in your file. Whoever " +
+                    "made the file chose that key, so this shows the file is self-consistent, not that the issuer " +
+                    `signed it. Even then, a valid signature proves what the key holder signed, ${NOT_QUANTUM}`
+                  : "Both signatures verify over the receipt's exact bytes under a published, unrevoked key. That proves " +
+                    `what this server signed, ${NOT_QUANTUM}`
+                : `${failureSummary(browser)}. Treat this document as unverified.${
+                    failedOnIssueTime(browser) ? " If it is genuine, check that your device's clock is correct." : ""}`}
             </p>
+            {view && <EvidenceClasses valid={valid} />}
           </div>
         </div>
 

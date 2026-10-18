@@ -299,3 +299,14 @@ async def test_empty_pool_does_not_use_up_quota():
     await pool.add(bytes(range(256)) * 4, {"backend": "b", "job_id": "J", "mode": "hardware"})
     used = [("ibm_quantum" in (await svc.get_stream("u1")).provenance.sources) for _ in range(3)]
     assert used == [True, True, False]
+
+
+async def test_error_flag_clears_after_recovery():
+    flaky = FakeProvider("lfd", error="boom")
+    svc = EntropyService([flaky])
+    await svc.get_stream()
+    assert svc.status()["providers"][0]["error"] is True
+    flaky._error = None
+    svc._live[0].last_fetch = float("-inf")
+    await svc.get_stream()
+    assert svc.status()["providers"][0]["error"] is False

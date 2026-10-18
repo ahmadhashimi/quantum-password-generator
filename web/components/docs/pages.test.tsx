@@ -116,7 +116,7 @@ describe("/transparency", () => {
 
   it("works through the IBM capacity numbers and the fallback order", () => {
     for (const s of ["127 × 2,048", "260,096 bits = 32,512 bytes", "8,128 bytes", "127", "10 QPU-minutes per 28 days",
-                     "2 per rolling 24 hours", "IBM pool, then ANU, then LfD, then the OS CSPRNG alone"]) {
+                     "2 per rolling 24 hours", "ANU, then LfD", "the OS CSPRNG alone"]) {
       expect(body).toContain(s);
     }
   });
@@ -127,7 +127,7 @@ describe("/transparency", () => {
                      "has not been done yet", "operator-asserted", "IBM does not sign job results"]) {
       expect(body).toContain(s);
     }
-    expect(page).toContain('href="https://github.com/ahmadhashimi/quantum-password-generator/blob/main/docs/SECURITY.md"');
+    expect(page).toContain('href="https://github.com/ahmadhashimi/quantum-password-generator/blob/v2/docs/SECURITY.md"');
   });
 });
 
@@ -144,6 +144,36 @@ describe("/status", () => {
       expect(body).toContain(s.meaning);
     }
     expect(body).toContain("The IBM simulator is classical pseudo-randomness. It is always labelled not quantum");
+  });
+});
+
+describe("links into the repository", () => {
+  it.each(Object.entries(html))("%s links every repository file and raw download to the same branch", (name, page) => {
+    const urls = [...page.matchAll(/https:\/\/(?:github\.com\/ahmadhashimi\/quantum-password-generator\/blob|raw\.githubusercontent\.com\/ahmadhashimi\/quantum-password-generator)\/([\w.-]+)\//g)];
+    if (name !== "status") expect(urls.length).toBeGreaterThan(0);
+    for (const m of urls) expect(m[1]).toBe("v2");
+  });
+
+  it("points the offline download at the same branch as the file links", () => {
+    expect(text(html.developers)).toContain("raw.githubusercontent.com/ahmadhashimi/quantum-password-generator/v2/backend/scripts/verify_receipt.py");
+  });
+});
+
+describe("evidence classes stay separate in the copy", () => {
+  it("does not describe the post-quantum signature as protecting how a secret was made, or as a certification", () => {
+    const body = text(html.transparency);
+    expect(body).toContain("this implementation is not FIPS validated");
+    expect(body).toContain("The signatures say nothing about how a secret was generated.");
+    expect(body).not.toContain("Quantum-assisted");
+  });
+
+  it("says that sources add to each other instead of listing a strict fallback chain", () => {
+    expect(text(html.status)).toContain("A request mixes in the sources that are available");
+    expect(text(html.status)).not.toContain("The fallback order is");
+  });
+
+  it("is honest about what the offline script does with duplicate keys", () => {
+    expect(text(html.developers)).toContain("the offline Python script does not");
   });
 });
 

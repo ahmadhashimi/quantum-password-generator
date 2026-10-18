@@ -1,10 +1,24 @@
 // @vitest-environment node
+import type { AnchorHTMLAttributes, ReactNode } from "react";
 import { renderToString } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import EnterprisePage from "@/app/enterprise/page";
 import HomePage from "@/app/page";
 import PricingPage from "@/app/pricing/page";
+
+/** Next's <Link> never writes `prefetch` into the HTML, so expose what each link asked for. */
+vi.mock("next/link", () => ({
+  default: ({ href, prefetch, children, ...rest }: Omit<AnchorHTMLAttributes<HTMLAnchorElement>, "href"> & {
+    href: string;
+    prefetch?: boolean | "auto" | null;
+    children?: ReactNode;
+  }) => (
+    <a href={href} data-prefetch={String(prefetch)} {...rest}>
+      {children}
+    </a>
+  ),
+}));
 
 const html = { home: renderToString(<HomePage />), pricing: renderToString(<PricingPage />),
                enterprise: renderToString(<EnterprisePage />) };
@@ -37,6 +51,14 @@ describe("honesty rules across the marketing pages", () => {
     }
   });
 
+  it("never prefetches an internal page: the destinations may show account data", () => {
+    for (const [name, page] of Object.entries(html)) {
+      const links = [...page.matchAll(/<a\b[^>]*?href="(\/[^"]*)"[^>]*>/g)];
+      expect(links.length, name).toBeGreaterThan(0);
+      for (const [tag, href] of links) expect(tag, `${name} ${href}`).toContain('data-prefetch="false"');
+    }
+  });
+
   it("loads no external scripts, images or inline HTML injection", () => {
     for (const page of Object.values(html)) {
       expect(page).not.toMatch(/<script|<img|<iframe|dangerouslySetInnerHTML/);
@@ -65,6 +87,12 @@ describe("/", () => {
     expect(t).toContain("Valid signatures prove what this server signed, not that a quantum device independently attested the entropy.");
     expect(t).toContain("IBM does not sign job results");
     expect(t).toContain("SP 800-90B-style RCT/APT screening");
+  });
+
+  it("does not promise quantum entropy on every request", () => {
+    expect(t).toContain("whenever one is available");
+    expect(t).toContain("Hybrid post-quantum signed receipts");
+    expect(t).toContain("that holds only while the OS CSPRNG itself is sound");
   });
 
   it("compares four options and admits where it is weaker", () => {
@@ -103,6 +131,11 @@ describe("/pricing", () => {
     }
     expect(t).toContain("never shown as contributing");
     expect(t).toContain("salted SHA-512 commitment");
+  });
+
+  it("is candid that the server holds a generated secret for the length of the request", () => {
+    expect(t).toContain("does hold the value in memory for the length of the request");
+    expect(t).toContain("on the roadmap, not available");
   });
 
   it("offers no purchase link", () => {

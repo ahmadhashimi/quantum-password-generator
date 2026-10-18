@@ -1,4 +1,5 @@
 /** Public, copyable examples for /developers. No real secrets, tokens or receipts: values are placeholders. */
+import { repoRaw } from "./repo";
 
 export const RECEIPT_JSON = `{
   "payload": {
@@ -95,7 +96,7 @@ export const IDEMPOTENCY_EXAMPLE = `curl -sS -X POST "$BASE/api/v2/draws" \\
 # Same key with a different body: 422`;
 
 export const OFFLINE_INSTALL = `pip install cryptography        # needs ML-DSA-65 support; the backend pins cryptography==50.0.2
-curl -sS -O ${"https://raw.githubusercontent.com/ahmadhashimi/quantum-password-generator/main/backend/scripts/verify_receipt.py"}`;
+curl -sS -O ${repoRaw("backend/scripts/verify_receipt.py")}`;
 
 export const OFFLINE_COMMANDS = `# A receipt: {"payload", "signatures"}, or a whole API response containing "receipt".
 python verify_receipt.py receipt.json keys.json

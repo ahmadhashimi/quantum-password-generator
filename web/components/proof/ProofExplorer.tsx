@@ -6,7 +6,7 @@ import { z } from "zod";
 
 import { ButtonLink, Card, CardBody } from "@/components/ui";
 import { api, apiWithText } from "@/lib/api/client";
-import { KeySet, Receipt, VerifyResult } from "@/lib/api/schemas";
+import { KeySet, VerifyResult } from "@/lib/api/schemas";
 
 import { LoadError } from "./LoadError";
 import { ProofReport } from "./ProofReport";
@@ -14,6 +14,15 @@ import { ProofSkeleton } from "./ProofSkeleton";
 import { useRemote } from "./useRemote";
 
 const VerifyMaterial = z.looseObject({ canonical_payload: z.string() });
+
+/**
+ * Only the outline of a stored receipt is required here. Judging its shape is the browser verifier's job: a stored
+ * receipt that no longer fits today's schema must read "Invalid receipt: <reason>", not "couldn't load".
+ */
+const StoredReceipt = z.looseObject({
+  payload: z.record(z.string(), z.unknown()),
+  signatures: z.record(z.string(), z.unknown()),
+});
 
 function NotFound({ receiptId }: { receiptId: string }) {
   return (
@@ -25,7 +34,8 @@ function NotFound({ receiptId }: { receiptId: string }) {
         <h2 className="text-xl font-semibold text-fg">Receipt not found</h2>
         <p className="max-w-md text-sm text-muted">
           This server has no receipt with ID <code className="font-mono text-xs break-all text-fg">{receiptId}</code>. Check
-          the ID for typos, or verify a saved receipt file in your browser.
+          the ID for typos. Receipts issued without an account are pruned after 30 days, so if you saved the receipt file,
+          verify that in your browser instead.
         </p>
         <div className="flex flex-wrap justify-center gap-3 pt-2">
           <ButtonLink href="/verify">Verify a receipt file</ButtonLink>
@@ -44,7 +54,7 @@ export function ProofExplorer({ receiptId }: { receiptId: string }) {
   const tag = `${receiptId}:${attempt}`;
 
   const receipt = useRemote(tag, useCallback(
-    (signal: AbortSignal) => apiWithText(`/api/v2/receipts/${encodeURIComponent(receiptId)}`, { schema: Receipt, signal }),
+    (signal: AbortSignal) => apiWithText(`/api/v2/receipts/${encodeURIComponent(receiptId)}`, { schema: StoredReceipt, signal }),
     [receiptId],
   ));
   const keys = useRemote(tag, useCallback(

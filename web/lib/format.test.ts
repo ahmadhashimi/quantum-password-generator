@@ -14,7 +14,8 @@ describe("format", () => {
   });
   it("masks secrets", () => {
     expect(maskSecret("abc")).toBe("•••");
-    expect(maskSecret("abcdefghij")).toBe("abc••••••••ij");
+    expect(maskSecret("abcdefghij")).toBe("••••••••••");
+    expect(maskSecret("abcdefghijklmnopqrst")).toBe("ab••••••••st");
   });
   it("relative time", () => {
     expect(timeAgo(null)).toBe("never");

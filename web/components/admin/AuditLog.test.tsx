@@ -20,16 +20,18 @@ const event = (seq: number, over: Partial<AuditEvent> = {}): AuditEvent => ({
 
 const range = (from: number, to: number): AuditEvent[] =>
   Array.from({ length: to - from + 1 }, (_, i) => event(from + i));
+const desc = (from: number, to: number): AuditEvent[] => range(from, to).reverse();
 
 const json = (body: unknown, status = 200): Response =>
   ({ ok: status < 400, status, headers: new Headers({ "x-request-id": "req-1" }), json: async () => body }) as Response;
 
-type Routes = { audit: (after: number) => Response | Promise<Response>; verify?: () => Response | Promise<Response> };
+/** `before` is 0 for the first (newest) page. */
+type Routes = { audit: (before: number) => Response | Promise<Response>; verify?: () => Response | Promise<Response> };
 
 function mockApi({ audit, verify }: Routes) {
   return vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
     const url = new URL(String(input), "http://localhost");
-    if (url.pathname === "/api/v2/admin/audit") return audit(Number(url.searchParams.get("after")));
+    if (url.pathname === "/api/v2/admin/audit") return audit(Number(url.searchParams.get("before") ?? 0));
     if (url.pathname === "/api/v2/admin/audit/verify" && verify) return verify();
     throw new Error(`unexpected request to ${String(input)}`);
   });
@@ -48,7 +50,7 @@ describe("AuditLog", () => {
     render(<AuditLog />);
 
     expect(await screen.findByRole("table", { name: "Audit log entries by sequence number" })).toBeInTheDocument();
-    expect(urls(spy)).toEqual([`/api/v2/admin/audit?after=0&limit=${PAGE_SIZE}`]);
+    expect(urls(spy)).toEqual([`/api/v2/admin/audit?order=desc&limit=${PAGE_SIZE}`]);
     expect(spy.mock.calls[0]?.[1]).toMatchObject({ cache: "no-store", method: "GET" });
 
     const rows = screen.getAllByRole("row");
@@ -58,13 +60,13 @@ describe("AuditLog", () => {
     expect(within(rows[2]!).getByText("draw.commit")).toBeInTheDocument();
     expect(within(rows[2]!).getByText("target-2")).toBeInTheDocument();
     expect(within(rows[2]!).getByText('{"winners":2}')).toBeInTheDocument();
-    expect(screen.getByText(/2 entries loaded, end of log/)).toBeInTheDocument();
+    expect(screen.getByText(/2 entries loaded, oldest entry reached/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Load more" })).not.toBeInTheDocument();
   });
 
-  it("pages with after=<last seq> and appends until a short page ends the log", async () => {
+  it("pages back with before=<oldest loaded seq> and appends until a short page reaches the oldest entry", async () => {
     const spy = mockApi({
-      audit: (after) => json({ events: after === 0 ? range(1, PAGE_SIZE) : range(PAGE_SIZE + 1, PAGE_SIZE + 3) }),
+      audit: (before) => json({ events: before === 0 ? desc(4, PAGE_SIZE + 3) : desc(1, 3) }),
     });
     render(<AuditLog />);
 
@@ -74,16 +76,16 @@ describe("AuditLog", () => {
 
     await waitFor(() => expect(screen.getAllByRole("row")).toHaveLength(PAGE_SIZE + 3 + 1));
     expect(urls(spy)).toEqual([
-      `/api/v2/admin/audit?after=0&limit=${PAGE_SIZE}`,
-      `/api/v2/admin/audit?after=${PAGE_SIZE}&limit=${PAGE_SIZE}`,
+      `/api/v2/admin/audit?order=desc&limit=${PAGE_SIZE}`,
+      `/api/v2/admin/audit?order=desc&before=4&limit=${PAGE_SIZE}`,
     ]);
-    expect(screen.getByText(`${PAGE_SIZE + 3} entries loaded, end of log`)).toBeInTheDocument();
+    expect(screen.getByText(`${PAGE_SIZE + 3} entries loaded, oldest entry reached`)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Load more" })).not.toBeInTheDocument();
   });
 
   it("keeps the loaded entries and reports an error when a later page fails", async () => {
     mockApi({
-      audit: (after) => (after === 0 ? json({ events: range(1, PAGE_SIZE) })
+      audit: (before) => (before === 0 ? json({ events: desc(1, PAGE_SIZE) })
                                       : json({ detail: "Database is busy" }, 503)),
     });
     render(<AuditLog />);

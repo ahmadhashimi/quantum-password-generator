@@ -182,7 +182,8 @@ export default function DevelopersPage() {
             <li>
               <strong className="text-fg">Parse losslessly.</strong> Keep every number&apos;s original text. Payloads are signed
               over Python&apos;s JSON, where <Code>256.0</Code> is not the same bytes as <Code>256</Code>. Reject duplicate
-              keys.
+              keys. The browser verifier does; the offline Python script does not, because Python&apos;s <Code>json</Code>{" "}
+              module keeps the last value.
             </li>
             <li>
               <strong className="text-fg">Check structure.</strong> The version is supported, the fields are exactly those in

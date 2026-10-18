@@ -113,6 +113,7 @@ class _ProviderState:
         self.consecutive_failures = 0
         self.successes += 1
         self.last_success_at = time.time()
+        self.last_error = None  # recovered: the public "recent error" flag must not stay stuck
 
 
 class EntropyService:

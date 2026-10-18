@@ -18,12 +18,17 @@ export function CodeBlock({ code, language, className }: { code: string; languag
       <pre className="overflow-x-auto p-4 text-[0.8rem] leading-relaxed text-fg"><code>{code}</code></pre>
       <button type="button" aria-label="Copy code"
               onClick={async () => {
-                await navigator.clipboard.writeText(code);
-                setCopied(true);
-                setTimeout(() => setCopied(false), 1500);
+                try {
+                  await navigator.clipboard.writeText(code);
+                  setCopied(true);
+                  setTimeout(() => setCopied(false), 1500);
+                } catch {
+                  /* clipboard unavailable (insecure context or permission denied); the code stays selectable */
+                }
               }}
               className="absolute top-2 right-2 rounded-md border border-border bg-surface-raised p-1.5 text-muted
-                         opacity-0 transition group-hover:opacity-100 focus:opacity-100 hover:text-fg">
+                         transition hover:text-fg [@media(hover:hover)]:opacity-0
+                         [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:focus:opacity-100">
         {copied ? <Check className="size-3.5 text-success" /> : <Copy className="size-3.5" />}
       </button>
     </div>

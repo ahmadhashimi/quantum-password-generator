@@ -137,6 +137,19 @@ describe("verify locally", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("also accepts the salt under the name the generation API uses", async () => {
+    const c = vector("password with commitment");
+    const doc = parseJson(c.text);
+    if (!isObject(doc)) throw new Error("unexpected vector");
+    doc.receipt_salt = c.salt ?? "";
+    render(<VerifyEntry />);
+    paste(stringifyLossless(doc));
+    fireEvent.click(verifyButton());
+    await screen.findByRole("heading", { name: "Valid receipt" });
+    expect(screen.getByLabelText("Salt")).toHaveValue(c.salt);
+    expect(screen.getByLabelText("Salt")).toHaveAttribute("type", "password");
+  });
+
   it("verifies an evidence export, and reports a key set that cannot be loaded with a retry", async () => {
     const c = vector("password with commitment");
     const browser = verifyReceiptText(c.text, toVerifyKeys(keys));
@@ -166,6 +179,8 @@ describe("verify locally", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Keys in the file" }));
     expect(await screen.findByRole("heading", { name: "Valid receipt" })).toBeInTheDocument();
     expect(screen.getByText(/whoever made the file chose them/)).toBeInTheDocument();
+    expect(screen.getByText(/self-consistent, not that the issuer signed it/)).toBeInTheDocument();
+    expect(screen.queryByText(/under a published, unrevoked key/)).not.toBeInTheDocument();
     await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
   });
 

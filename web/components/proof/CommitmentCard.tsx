@@ -1,6 +1,6 @@
 "use client";
 
-import { Lock } from "lucide-react";
+import { Eye, EyeOff, Lock } from "lucide-react";
 import { type FormEvent, useState } from "react";
 
 import { Badge, Button, Callout, Card, CardBody, CardHeader, Field, Input } from "@/components/ui";
@@ -29,6 +29,7 @@ export function CommitmentCard({ commitment, initialSalt, verified }: {
 }) {
   const [value, setValue] = useState("");
   const [salt, setSalt] = useState(initialSalt ?? "");
+  const [showSalt, setShowSalt] = useState(false);
   const [errors, setErrors] = useState<{ value?: string; salt?: string }>({});
   const [outcome, setOutcome] = useState<"match" | "mismatch" | null>(null);
 
@@ -66,14 +67,22 @@ export function CommitmentCard({ commitment, initialSalt, verified }: {
                        }} />
               )}
             </Field>
-            <Field label="Salt" error={errors.salt} hint="Saved with the receipt download (the “salt” field).">
+            <Field label="Salt" error={errors.salt} hint="Saved with the receipt download (the “salt” field). Keep it private.">
               {({ id, describedBy, invalid }) => (
-                <Input id={id} type="text" autoComplete="off" autoCapitalize="off" spellCheck={false}
-                       className="font-mono" value={salt} aria-describedby={describedBy} aria-invalid={invalid}
-                       onChange={(e) => {
-                         setSalt(e.target.value);
-                         setOutcome(null);
-                       }} />
+                <div className="flex gap-2">
+                  {/* Masked like the value: with the commitment, a salt lets anyone test guesses at a weak secret. */}
+                  <Input id={id} type={showSalt ? "text" : "password"} autoComplete="off" autoCapitalize="off"
+                         spellCheck={false} className="min-w-0 flex-1 font-mono" value={salt}
+                         aria-describedby={describedBy} aria-invalid={invalid}
+                         onChange={(e) => {
+                           setSalt(e.target.value);
+                           setOutcome(null);
+                         }} />
+                  <Button variant="secondary" size="icon" aria-label={showSalt ? "Hide salt" : "Show salt"}
+                          aria-pressed={showSalt} onClick={() => setShowSalt((v) => !v)}>
+                    {showSalt ? <EyeOff className="size-4" aria-hidden /> : <Eye className="size-4" aria-hidden />}
+                  </Button>
+                </div>
               )}
             </Field>
           </div>

@@ -235,6 +235,7 @@
  "paths": {
   "/api/v2/admin/audit": {
    "get": {
+    "description": "`order=asc` pages forward with `after`; `order=desc` pages back from the newest event with `before`.",
     "operationId": "audit_events_api_v2_admin_audit_get",
     "parameters": [
      {
@@ -258,6 +259,37 @@
        "minimum": 1,
        "title": "Limit",
        "type": "integer"
+      }
+     },
+     {
+      "in": "query",
+      "name": "order",
+      "required": false,
+      "schema": {
+       "default": "asc",
+       "enum": [
+        "asc",
+        "desc"
+       ],
+       "title": "Order",
+       "type": "string"
+      }
+     },
+     {
+      "in": "query",
+      "name": "before",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "minimum": 1,
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Before"
       }
      }
     ],

@@ -11,7 +11,7 @@ import DrawsPage from "@/app/draws/page";
 describe("/draws page shell", () => {
   it("server-renders without a browser, with the three steps and the limits", () => {
     const html = renderToString(<DrawsPage />);
-    expect(html).toContain("Provably fair draws");
+    expect(html).toContain("Verifiable draws");
     for (const step of ["Commit", "Run", "Verify"]) expect(html).toContain(step);
     expect(html).toContain("The operator can still choose when to run a draw or withhold a result");
     expect(html).toContain("Not for regulated gambling or lotteries.");

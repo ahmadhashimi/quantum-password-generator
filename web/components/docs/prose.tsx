@@ -3,8 +3,7 @@ import type { ReactNode } from "react";
 
 import { cn } from "@/lib/cn";
 
-export const REPO_URL = "https://github.com/ahmadhashimi/quantum-password-generator";
-export const repoFile = (path: string): string => `${REPO_URL}/blob/main/${path}`;
+export { REPO_URL, repoFile } from "./repo";
 
 /** Inline code. */
 export function Code({ children, className }: { children: ReactNode; className?: string }) {

@@ -23,8 +23,10 @@ export function DashboardNav() {
           const current = active(href);
           return (
             <li key={href}>
+              {/* The ring is drawn inside the link: this strip scrolls sideways, which would clip an outer outline. */}
               <Link href={href} prefetch={false} aria-current={current ? "page" : undefined}
                     className={cn("-mb-px inline-flex items-center gap-2 border-b-2 px-3 py-3 text-sm font-medium transition",
+                                  "focus-visible:-outline-offset-2",
                                   current ? "border-accent text-fg" : "border-transparent text-muted hover:text-fg")}>
                 <Icon className="size-4" aria-hidden />
                 {label}

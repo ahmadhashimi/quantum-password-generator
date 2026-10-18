@@ -13,6 +13,8 @@ test("capture", async ({ page }) => {
   await page.goto("/generate");
   await page.getByRole("button", { name: /^generate/i }).first().click();
   await page.locator('main a[href^="/verify/"]').first().waitFor();
+  await page.evaluate(() => window.scrollTo(0, 120));
+  await page.waitForTimeout(800); // let backdrop-filter surfaces repaint after the scroll
   await page.screenshot({ path: `${OUT}/v21-generate.png`, fullPage: false });
 
   await page.locator('main a[href^="/verify/"]').first().click();
@@ -27,6 +29,9 @@ test("capture", async ({ page }) => {
   await page.getByRole("button", { name: /commit entries/i }).click();
   await page.getByRole("button", { name: /run the draw/i }).click();
   await page.locator('a[href^="/verify/"]').last().waitFor();
+  await page.getByText(/^winners?$/i).first().scrollIntoViewIfNeeded().catch(() => undefined);
+  await page.evaluate(() => window.scrollBy(0, -160));
+  await page.waitForTimeout(800);
   await page.screenshot({ path: `${OUT}/v21-draws.png` });
 
   await page.goto("/status");

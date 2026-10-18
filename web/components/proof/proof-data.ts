@@ -2,6 +2,7 @@
  * Pure helpers for the Proof Explorer: typed views of the browser-verified payload, display formatting, the checks
  * the browser and server disagree on, and the evidence export. Nothing here touches the network or the DOM.
  */
+import { repoFile } from "@/components/docs/repo";
 import type { Tone } from "@/components/ui";
 import type { KeySet as ApiKeySet, VerifyResult } from "@/lib/api/schemas";
 import { RECEIPT_ID } from "@/lib/format";
@@ -9,8 +10,7 @@ import { isObject, JsonNumber, type JsonValue, parseJson, type PlainJson, string
 import type { BrowserVerification, KeySet as VerifyKeySet } from "@/lib/verify/verify";
 
 export const EVIDENCE_FORMAT = "quantumpass-evidence/1";
-export const SCRIPT_URL =
-  "https://github.com/ahmadhashimi/quantum-password-generator/blob/v2/backend/scripts/verify_receipt.py";
+export const SCRIPT_URL = repoFile("backend/scripts/verify_receipt.py");
 
 export type Remote<T> =
   | { status: "loading" }
@@ -23,7 +23,7 @@ export type CheckState = "pass" | "fail" | "skip";
 export type SignatureId = "ed25519" | "ml-dsa-65";
 export const SIGNATURES: readonly { id: SignatureId; label: string; note: string }[] = [
   { id: "ed25519", label: "Ed25519", note: "classical" },
-  { id: "ml-dsa-65", label: "ML-DSA-65", note: "post-quantum, FIPS 204" },
+  { id: "ml-dsa-65", label: "ML-DSA-65", note: "post-quantum, algorithm from FIPS 204" },
 ];
 
 type PlainObject = { [key: string]: PlainJson };
@@ -259,6 +259,14 @@ const REASONS: Record<string, string> = {
 };
 export const reasonText = (reason: string | null | undefined): string =>
   reason ? (REASONS[reason] ?? `Rejected: ${reason}.`) : "The server's verifier rejects this receipt.";
+
+/** True when verification stopped because the receipt's issue time is in the future, which a wrong device clock causes. */
+export const failedOnIssueTime = (browser: BrowserVerification): boolean =>
+  browser.checks.some((c) => !c.ok && c.detail?.includes("issued_at") === true);
+
+/** A file name that is safe in a copied shell command: only a well-formed receipt ID is used verbatim. */
+export const evidenceFileName = (receiptId: string): string =>
+  `evidence-${RECEIPT_ID.test(receiptId) ? receiptId : "receipt"}.json`;
 
 /** The first failing browser check, as a sentence. */
 export function failureSummary(browser: BrowserVerification): string {

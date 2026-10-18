@@ -11,7 +11,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Audit Events */
+        /**
+         * Audit Events
+         * @description `order=asc` pages forward with `after`; `order=desc` pages back from the newest event with `before`.
+         */
         get: operations["audit_events_api_v2_admin_audit_get"];
         put?: never;
         post?: never;
@@ -469,6 +472,8 @@ export interface operations {
             query?: {
                 after?: number;
                 limit?: number;
+                order?: "asc" | "desc";
+                before?: number | null;
             };
             header?: never;
             path?: never;

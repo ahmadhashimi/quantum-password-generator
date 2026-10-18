@@ -176,7 +176,7 @@ function TierCard({ tier }: { tier: Tier }) {
           <span className="text-4xl font-semibold tracking-tight text-fg tabular-nums">{tier.price}</span>
           {tier.unit && <span className="text-sm text-muted">{tier.unit}</span>}
         </p>
-        <p className="mt-1 text-xs text-subtle">{tier.priceNote}</p>
+        <p className="mt-1 text-xs text-muted">{tier.priceNote}</p>
         <ButtonLink href={tier.cta.href} variant={tier.cta.primary ? "primary" : "secondary"} className="mt-6 w-full">
           {tier.cta.label}
         </ButtonLink>
@@ -184,7 +184,7 @@ function TierCard({ tier }: { tier: Tier }) {
           <FeatureList items={tier.today} kind="today" />
           <FeatureList items={tier.planned} kind="planned" />
         </div>
-        {tier.footnote && <p className="mt-auto pt-6 text-xs text-subtle">{tier.footnote}</p>}
+        {tier.footnote && <p className="mt-auto pt-6 text-xs text-muted">{tier.footnote}</p>}
       </Card>
     </li>
   );

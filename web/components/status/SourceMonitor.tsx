@@ -14,13 +14,15 @@ const names = (views: { name: string }[]): string => views.map((v) => sourceLabe
 
 function Banner({ status }: { status: EntropyStatus }) {
   const { availableQuantum, unavailableQuantum, simulatorAvailable } = summarize(status);
-  if (status.quantum_available) {
+  // The server's flag is not taken on its own: a source is only named as available if its own entry says so.
+  if (status.quantum_available && availableQuantum.length > 0) {
     return (
       <Callout tone="success" role="status" title="Quantum source available">
         <p>
-          {availableQuantum.length > 0 ? <>Available now: {names(availableQuantum)}.</> : "A quantum source is available."}
+          Available now: {names(availableQuantum)}.
           {unavailableQuantum.length > 0 && <> Not available: {names(unavailableQuantum)}.</>}{" "}
           New requests that use an available quantum source also mix in the OS CSPRNG.
+          {availableQuantum.every((v) => v.isPool) && " The IBM pool serves signed-in users only."}
         </p>
       </Callout>
     );

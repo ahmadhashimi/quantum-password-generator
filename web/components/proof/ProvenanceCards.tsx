@@ -89,7 +89,8 @@ export function ProvenanceCard({ view, verified }: { view: PayloadView; verified
             <ul className="space-y-2">
               {p.health.map((h) => (
                 <li key={h.name} className="flex flex-wrap items-center gap-2 text-sm text-muted">
-                  <Badge tone={h.outcome === "pass" ? "success" : "neutral"}>{h.outcome}</Badge>
+                  {/* A claim, not a verified result: no green "pass" inside an operator-asserted section. */}
+                  <Badge tone="neutral">{h.outcome}</Badge>
                   {healthLabel(h.name)}
                 </li>
               ))}

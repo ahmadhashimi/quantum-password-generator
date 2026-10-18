@@ -139,9 +139,11 @@ export const Me = z.looseObject({
 export type Me = z.infer<typeof Me>;
 
 export const MeReceipts = z.object({
-  items: z.array(z.looseObject({ receipt_id: z.string(), kind: z.string(), created_at: z.string(), version: z.string(),
-                                 sources: z.array(z.string()), quantum: z.boolean(), entropy_bits: z.number().nullable(),
-                                 key_id: z.string() })),
+  // Tolerant per row: one receipt with unusual provenance must not blank the whole history page.
+  items: z.array(z.looseObject({ receipt_id: z.string(), kind: z.string(), created_at: z.string(),
+                                 version: z.string().catch("unknown"), sources: z.array(z.string()).catch([]),
+                                 quantum: z.boolean().catch(false), entropy_bits: z.number().nullable().catch(null),
+                                 key_id: z.string().catch("") })),
   next_before: z.string().nullable(),
 });
 export type MeReceipts = z.infer<typeof MeReceipts>;

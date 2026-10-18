@@ -57,11 +57,11 @@ export function ProviderCard({ view, now }: { view: ProviderView; now: number })
         </Item>
         <Item label="Recent error">
           {view.recentError ? "Yes" : "No"}
-          {view.recentError && <span className="block text-xs text-muted">Details are not public</span>}
+          {view.recentError && <span className="block text-xs text-muted">An error was recorded; details are not public</span>}
         </Item>
         {view.isPool && (
           <>
-            <Item label="Mode">{view.simulator ? "Simulator: not quantum" : "Hardware"}</Item>
+            <Item label="Mode">{view.simulator ? "Simulator: not quantum" : view.hardware ? "Hardware" : "Not reported"}</Item>
             <Item label="Jobs in last 24 h">{view.jobsLast24h ?? "Not reported"}</Item>
             <Item label="Pool">
               {view.poolBytes?.toLocaleString("en-US")} bytes
