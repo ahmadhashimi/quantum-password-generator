@@ -1,0 +1,39 @@
+# Production: Caddy (TLS + reverse proxy) in front of the app. Only Caddy is exposed.
+#   DOMAIN=quantumpass.example.com docker compose up -d --build
+services:
+  app:
+    build:
+      context: .
+      args:
+        VITE_CLERK_PUBLISHABLE_KEY: ${VITE_CLERK_PUBLISHABLE_KEY:-}
+        WITH_IBM: "true"
+    env_file: backend/.env
+    environment:
+      ENVIRONMENT: production
+      ALLOWED_HOSTS: '["${DOMAIN}"]'
+      ALLOWED_ORIGINS: '["https://${DOMAIN}"]'
+    volumes:
+      - app-data:/data
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    restart: unless-stopped
+    expose: ["8000"]
+
+  caddy:
+    image: caddy:2.10-alpine
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN}
+    ports: ["80:80", "443:443", "443:443/udp"]
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on: [app]
+    restart: unless-stopped
+
+volumes:
+  app-data:
+  caddy-data:
+  caddy-config:

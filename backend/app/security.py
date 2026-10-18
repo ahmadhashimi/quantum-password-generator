@@ -45,7 +45,9 @@ class SecurityHeadersMiddleware:
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
             return await self.app(scope, receive, send)
-        is_api = scope["path"].startswith("/api/") or scope["path"].startswith("/quantum-")
+        path = scope["path"]
+        is_api = path.startswith("/api/") or path.startswith("/quantum-")
+        is_hashed_asset = path.startswith("/assets/")  # Vite fingerprints these filenames
 
         async def send_wrapper(message: Message) -> None:
             if message["type"] == "http.response.start":
@@ -55,6 +57,10 @@ class SecurityHeadersMiddleware:
                 if is_api:  # API responses can contain secrets: never cache anywhere
                     headers = [h for h in headers if h[0].lower() != b"cache-control"]
                     headers += [(b"cache-control", b"no-store, max-age=0"), (b"pragma", b"no-cache")]
+                elif is_hashed_asset:
+                    headers.append((b"cache-control", b"public, max-age=31536000, immutable"))
+                elif b"cache-control" not in existing:  # index.html etc.: always revalidate
+                    headers.append((b"cache-control", b"no-cache"))
                 message["headers"] = headers
             await send(message)
 

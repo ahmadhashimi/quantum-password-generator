@@ -97,11 +97,19 @@ cd frontend && npm test && npm run build
 ## Deploy
 
 ```bash
-docker build --build-arg VITE_CLERK_PUBLISHABLE_KEY=pk_live_... --build-arg WITH_IBM=true -t qpg .
-docker run -p 8000:8000 --env-file backend/.env -v qpg-data:/data --read-only --tmpfs /tmp qpg
+cp backend/.env.example backend/.env   # fill in keys, IBM_MODE=hardware when ready
+DOMAIN=quantumpass.example.com VITE_CLERK_PUBLISHABLE_KEY=pk_live_... docker compose up -d --build
 ```
 
-Run a single worker: the IBM harvester, entropy pool and assistant conversations live in process memory. Put it behind TLS, and set `ENVIRONMENT=production`, `ALLOWED_HOSTS` and `ALLOWED_ORIGINS`.
+`docker-compose.yml` runs the app behind **Caddy**, which handles automatic HTTPS, HTTP/3, compression, a 1 MB request limit and unbuffered SSE for the assistant. Only Caddy is exposed. The app container is read-only, non-root and runs with all Linux capabilities dropped.
+
+Operational notes:
+- **Single instance by design.** Rate limits, the IBM entropy pool and assistant conversations live in process memory. That's right for a small app. If you scale past one instance, move them to Redis/Postgres first.
+- **Trusted proxy.** The app only honours `X-Forwarded-For` from `FORWARDED_ALLOW_IPS` (the compose network by default), so clients can't spoof IPs to dodge rate limits.
+- **Caching.** API responses are `no-store` because they carry secrets. Fingerprinted `/assets/*` files are cached for a year, and `index.html` always revalidates.
+- **Circuit breaker.** Used only on the external QRNG providers. 3 consecutive failures cause a 60 s cooldown, then fallback to the next source.
+- **No long polling.** Generation is a single fast request, the assistant streams over SSE, and source status refreshes on demand.
+- **Cost guardrails.** `ASSISTANT_DAILY_BUDGET_USD` (global kill switch), `ASSISTANT_DAILY_MESSAGES_PER_USER`, `ASSISTANT_MAX_TOKENS`, `ASSISTANT_MAX_TOOL_ITERATIONS` and `IBM_MAX_JOBS_PER_DAY`. Spend appears on the admin dashboard.
 
 ## Credits
 

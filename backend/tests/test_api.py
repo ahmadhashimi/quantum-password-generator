@@ -179,3 +179,25 @@ def test_clerk_webhook_signature(monkeypatch):
     with Session(db.engine()) as s:
         u = s.get(db.User, "user_wh")
     assert u.email == "grace@example.com" and u.name == "Grace Hopper"
+
+
+def test_cache_headers_for_static_assets(tmp_path, monkeypatch):
+    dist = tmp_path / "dist"
+    (dist / "assets").mkdir(parents=True)
+    (dist / "index.html").write_text("<html></html>")
+    (dist / "assets" / "index-abc123.js").write_text("console.log(1)")
+    monkeypatch.setenv("FRONTEND_DIST", str(dist))
+    get_settings.cache_clear()
+    with make_client() as c:
+        assert "immutable" in c.get("/assets/index-abc123.js").headers["cache-control"]
+        assert c.get("/").headers["cache-control"] == "no-cache"
+        assert c.get("/api/v2/health").headers["cache-control"].startswith("no-store")
+
+
+def test_spoofed_forwarded_for_is_ignored_without_trusted_proxy(monkeypatch):
+    monkeypatch.setenv("RATE_LIMIT_ANONYMOUS", "2/minute")
+    monkeypatch.setenv("ENVIRONMENT", "production")  # no auto-signed-in dev user
+    get_settings.cache_clear()
+    with make_client() as c:
+        codes = [c.get("/api/v2/password", headers={"X-Forwarded-For": f"10.0.0.{i}"}).status_code for i in range(3)]
+    assert codes[-1] == 429  # rotating the header doesn't reset the limit
