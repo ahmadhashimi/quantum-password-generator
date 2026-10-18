@@ -13,6 +13,8 @@ import base64
 import hashlib
 import hmac
 import json
+import math
+import re
 import os
 import secrets
 import time
@@ -23,7 +25,9 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 from cryptography.hazmat.primitives.asymmetric.mldsa import MLDSA65PrivateKey, MLDSA65PublicKey
 
-RECEIPT_VERSION = "qpg-receipt/1"
+RECEIPT_VERSION = "qpg-receipt/2"
+SUPPORTED_VERSIONS = {"qpg-receipt/1", RECEIPT_VERSION}
+SUPPORTED_KINDS = {"password", "passphrase", "random", "draw", "draw_commit"}
 ALGORITHMS = ("ed25519", "ml-dsa-65")
 # Domain separation (as in the IETF LAMPS composite-signature design): each signature covers a label naming the
 # hybrid scheme, so a receipt's Ed25519 or ML-DSA signature can't be lifted out and presented as a stand-alone
@@ -136,6 +140,53 @@ class Keyring:
         return self._keys.get(key_id) if isinstance(key_id, str) else None
 
 
+def receipt_schema_valid(payload: object) -> bool:
+    """Strict signed-payload schema check. Keep legacy qpg-receipt/1 verifiable."""
+    if not isinstance(payload, dict) or payload.get("version") not in SUPPORTED_VERSIONS:
+        return False
+    base = {"version", "receipt_id", "issued_at", "kind", "key_id",
+            "provenance", "entropy_bits", "commitment", "result", "details"}
+    required = base | ({"evidence"} if payload["version"] == RECEIPT_VERSION else set())
+    if set(payload) != required:
+        return False
+    if not isinstance(payload["receipt_id"], str) or not re.fullmatch(r"[A-Za-z0-9_-]{12,64}", payload["receipt_id"]):
+        return False
+    if not isinstance(payload["key_id"], str) or not re.fullmatch(r"[a-f0-9]{16}", payload["key_id"]):
+        return False
+    issued_at = payload["issued_at"]
+    if type(issued_at) is not int or issued_at <= 0 or issued_at > time.time() + 300:
+        return False
+    if payload["kind"] not in SUPPORTED_KINDS:
+        return False
+    provenance = payload["provenance"]
+    if not isinstance(provenance, dict):
+        return False
+    if not isinstance(provenance.get("sources"), list) or any(
+            not isinstance(source, str) or len(source) > 100 for source in provenance["sources"]):
+        return False
+    if type(provenance.get("quantum")) is not bool or type(provenance.get("quantum_bytes")) is not int:
+        return False
+    if not 0 <= provenance["quantum_bytes"] <= 1_000_000 or not isinstance(provenance.get("mixed_with"), str):
+        return False
+    bits = payload["entropy_bits"]
+    if bits is not None and (type(bits) not in (int, float) or not math.isfinite(bits) or bits < 0):
+        return False
+    commitment = payload["commitment"]
+    if commitment is not None and (not isinstance(commitment, str) or not re.fullmatch(r"[a-f0-9]{128}", commitment)):
+        return False
+    if payload["result"] is not None and not isinstance(payload["result"], dict):
+        return False
+    if not isinstance(payload["details"], dict):
+        return False
+    if payload["version"] == RECEIPT_VERSION:
+        return payload["evidence"] == {
+            "integrity": "hybrid-signature:ed25519+ml-dsa-65",
+            "provenance": "operator-asserted",
+            "quantum_evidence": "none",
+        }
+    return True
+
+
 def verify_signatures(payload: dict, signatures: dict, public_keys: dict) -> dict[str, bool]:
     results = {"ed25519": False, "ml-dsa-65": False}
     try:
@@ -154,14 +205,35 @@ def verify_signatures(payload: dict, signatures: dict, public_keys: dict) -> dic
 
 def verify_receipt(payload: dict, signatures: dict, keyring: Keyring) -> dict:
     """Full check: known key, both signatures, and not issued after the key's revocation."""
+    version_supported = isinstance(payload, dict) and payload.get("version") in SUPPORTED_VERSIONS
+    schema_valid = receipt_schema_valid(payload)
+    invalid = {"ed25519": False, "ml-dsa-65": False}
+    if not schema_valid:
+        return {"valid": False, "reason": "unsupported_version" if not version_supported else "invalid_schema",
+                "signatures": invalid, "schema_valid": False, "version_supported": version_supported,
+                "integrity": "invalid", "provenance": "unverified", "quantum_evidence": "none"}
     key = keyring.get(payload.get("key_id"))
     if key is None:
-        return {"valid": False, "reason": "unknown_key", "signatures": {"ed25519": False, "ml-dsa-65": False}}
+        return {"valid": False, "reason": "unknown_key", "signatures": invalid,
+                "schema_valid": True, "version_supported": True,
+                "integrity": "invalid", "provenance": "unverified", "quantum_evidence": "none"}
+    try:
+        true_key_id = hashlib.sha256(unb64(key["ed25519"]) + unb64(key["ml-dsa-65"])).hexdigest()[:16]
+    except (KeyError, ValueError, TypeError):
+        true_key_id = None
+    if true_key_id != payload["key_id"]:
+        return {"valid": False, "reason": "key_id_mismatch", "signatures": invalid,
+                "schema_valid": True, "version_supported": True,
+                "integrity": "invalid", "provenance": "unverified", "quantum_evidence": "none"}
     sigs = verify_signatures(payload, signatures, key)
     revoked = key["status"] == "revoked" and (
         not isinstance(payload.get("issued_at"), int) or payload["issued_at"] >= key.get("revoked_at", 0))
     reason = "revoked_key" if revoked else (None if all(sigs.values()) else "bad_signature")
-    return {"valid": reason is None, "reason": reason, "signatures": sigs, "key_status": key["status"]}
+    return {"valid": reason is None, "reason": reason, "signatures": sigs, "key_status": key["status"],
+            "schema_valid": True, "version_supported": True,
+            "integrity": "verified" if reason is None else "invalid",
+            "provenance": "operator-asserted" if reason is None else "unverified",
+            "quantum_evidence": "none"}
 
 
 def build_receipt(signer: Signer, kind: str, provenance: dict, *, entropy_bits: float | None = None,
@@ -181,6 +253,8 @@ def build_receipt(signer: Signer, kind: str, provenance: dict, *, entropy_bits: 
         "commitment": commitment(secret_value, salt) if secret_value is not None and salt else None,
         "result": public_result,
         "details": details or {},
+        "evidence": {"integrity": "hybrid-signature:ed25519+ml-dsa-65",
+                     "provenance": "operator-asserted", "quantum_evidence": "none"},
     }
     return {"payload": payload, "signatures": signer.sign(payload), "algorithms": list(ALGORITHMS)}, (
         b64(salt) if salt else None)
