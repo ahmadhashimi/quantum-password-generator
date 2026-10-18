@@ -24,7 +24,13 @@ function ClerkBridge({ children }: { children: ReactNode }) {
 export function AuthProvider({ children }: { children: ReactNode }) {
   if (!CLERK_KEY) return <AuthContext.Provider value={noAuth}>{children}</AuthContext.Provider>;
   return (
-    <ClerkProvider publishableKey={CLERK_KEY} afterSignOutUrl="/">
+    <ClerkProvider
+      publishableKey={CLERK_KEY}
+      afterSignOutUrl="/"
+      appearance={{
+        variables: { colorPrimary: "#06b6d4", borderRadius: "0.75rem", fontFamily: "Inter, ui-sans-serif, system-ui" },
+      }}
+    >
       <ClerkBridge>{children}</ClerkBridge>
     </ClerkProvider>
   );

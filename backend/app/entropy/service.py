@@ -33,17 +33,23 @@ class Provenance:
     quantum: bool
     quantum_bytes: int
     failures: dict[str, str] = field(default_factory=dict)
+    ibm_job: dict | None = None
     timestamp: float = field(default_factory=time.time)
 
     def as_dict(self) -> dict:
-        return {
+        d = {
             "sources": self.sources,
             "quantum": self.quantum,
             "quantum_bytes": self.quantum_bytes,
             "mixed_with": "os_csprng",
             "failures": self.failures,
+            # Every contributing source passed SP 800-90B RCT + APT; failing sources are excluded above.
+            "health": {"sp800_90b": "pass" if self.sources != ["os_csprng"] else "n/a"},
             "timestamp": self.timestamp,
         }
+        if self.ibm_job:
+            d["ibm_job"] = self.ibm_job
+        return d
 
 
 @dataclass
@@ -145,8 +151,13 @@ class EntropyService:
             sources.append(live[0])
             extra += live[1]
             quantum_bytes += len(live[1])
+        ibm_job = None
+        if pooled and self.harvester and self.harvester.last_job_id:
+            # Most recent harvest feeding the pool (the pool can hold bytes from earlier jobs too).
+            ibm_job = {"backend": self.harvester.last_backend, "job_id": self.harvester.last_job_id,
+                       "mode": "simulator" if self.harvester.simulator else "hardware"}
         prov = Provenance(sources=sources or ["os_csprng"], quantum=quantum_bytes > 0, quantum_bytes=quantum_bytes,
-                          failures=failures)
+                          failures=failures, ibm_job=ibm_job)
         return EntropyResult(KeyStream(derive_key(extra)), prov)
 
     def status(self) -> dict:

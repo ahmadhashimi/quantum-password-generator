@@ -35,6 +35,16 @@ export async function apiGet<T>(path: string, params?: Record<string, string | n
   return (await res.json()) as T;
 }
 
+export async function apiPost<T>(path: string, body: unknown, getToken?: TokenGetter) {
+  const res = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(await authHeaders(getToken)) },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw await errorFrom(res);
+  return (await res.json()) as T;
+}
+
 /** Parse a text/event-stream body into typed events. */
 export async function* parseSSE(body: ReadableStream<Uint8Array>): AsyncGenerator<ChatEvent> {
   const reader = body.getReader();

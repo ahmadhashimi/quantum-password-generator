@@ -96,3 +96,14 @@ def generate_passphrase(stream: KeyStream, words: int, separator: str = "-", cap
         picked.append(str(uniform_index(stream, 100)))
         bits += math.log2(100)
     return separator.join(picked), bits
+
+
+def draw_winners(stream: KeyStream, entries: list[str], winners: int) -> list[int]:
+    """Pick `winners` distinct indexes uniformly (partial Fisher-Yates with unbiased sampling)."""
+    if not 0 < winners <= len(entries):
+        raise ValueError("Winners must be between 1 and the number of entries")
+    idx = list(range(len(entries)))
+    for i in range(winners):
+        j = i + uniform_index(stream, len(idx) - i)
+        idx[i], idx[j] = idx[j], idx[i]
+    return idx[:winners]

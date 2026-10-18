@@ -7,11 +7,52 @@ export interface Provenance {
   timestamp: number;
 }
 
+export interface ReceiptPayload {
+  version: string;
+  receipt_id: string;
+  issued_at: number;
+  kind: "password" | "passphrase" | "random" | "draw";
+  key_id: string;
+  provenance: Pick<Provenance, "sources" | "quantum" | "quantum_bytes" | "mixed_with"> & {
+    ibm_job?: { backend: string; job_id: string; mode: string };
+    health?: Record<string, string>;
+  };
+  entropy_bits: number | null;
+  commitment: string | null;
+  result: DrawResult | null;
+  details: Record<string, unknown>;
+}
+
+export interface Receipt {
+  payload: ReceiptPayload;
+  signatures: Record<string, string>;
+  algorithms?: string[];
+}
+
+export interface DrawResult {
+  title: string;
+  entries_count: number;
+  entries_sha256: string;
+  winners: { index: number; entry: string }[];
+}
+
+export interface VerifyResult {
+  valid: boolean;
+  signatures: Record<string, boolean>;
+  key_id_matches: boolean;
+  in_public_log: boolean;
+  payload: ReceiptPayload;
+  commitment_matches?: boolean;
+  entries_match?: boolean;
+}
+
 export interface PasswordResult {
   password: string;
   length: number;
   entropy_bits: number;
   provenance: Provenance;
+  receipt?: Receipt;
+  receipt_salt?: string;
 }
 
 export interface PassphraseResult {
@@ -19,6 +60,8 @@ export interface PassphraseResult {
   words: number;
   entropy_bits: number;
   provenance: Provenance;
+  receipt?: Receipt;
+  receipt_salt?: string;
 }
 
 export interface ProviderStatus {

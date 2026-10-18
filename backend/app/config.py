@@ -53,6 +53,10 @@ class Settings(BaseSettings):
     # Hosts Clerk's browser SDK loads from (CSP). Add your production Clerk Frontend API host.
     clerk_hosts: list[str] = Field(default_factory=lambda: ["https://*.clerk.accounts.dev"])
 
+    # Receipt signing keys: SIGNING_KEYS (JSON of base64 seeds) or a 0600 key file created on first start.
+    signing_keys: str | None = None
+    signing_key_path: str | None = "./signing_keys.json"
+
     database_url: str = "sqlite:///./qpg.db"
 
     # Rate limits (slowapi syntax)

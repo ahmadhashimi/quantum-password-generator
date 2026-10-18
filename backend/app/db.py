@@ -37,6 +37,18 @@ class UsageEvent(SQLModel, table=True):
     created_at: datetime = Field(default_factory=_now, index=True)
 
 
+class Receipt(SQLModel, table=True):
+    """Public verification log. Holds only signed payloads (commitments, never secrets)."""
+
+    __tablename__ = "receipts"
+    id: str = Field(primary_key=True)
+    kind: str = Field(index=True)
+    user_id: str | None = Field(default=None, index=True)
+    payload: str  # canonical JSON
+    signatures: str  # JSON
+    created_at: datetime = Field(default_factory=_now, index=True)
+
+
 _engine = None
 
 
@@ -138,3 +150,23 @@ def admin_stats() -> dict:
         "recent_users": [{"id": u.id, "email": u.email, "name": u.name, "last_seen": u.last_seen.isoformat()}
                          for u in recent],
     }
+
+
+def save_receipt(receipt: dict, user_id: str | None) -> None:
+    import json
+
+    p = receipt["payload"]
+    with Session(engine()) as s:
+        s.add(Receipt(id=p["receipt_id"], kind=p["kind"], user_id=user_id,
+                      payload=json.dumps(p, sort_keys=True), signatures=json.dumps(receipt["signatures"])))
+        s.commit()
+
+
+def get_receipt(receipt_id: str) -> dict | None:
+    import json
+
+    with Session(engine()) as s:
+        r = s.get(Receipt, receipt_id)
+    if r is None:
+        return None
+    return {"payload": json.loads(r.payload), "signatures": json.loads(r.signatures)}

@@ -2,9 +2,10 @@ import { KeyRound, RefreshCw, Text } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { apiGet } from "../lib/api";
 import { useAppAuth } from "../lib/auth";
-import type { PassphraseResult, PasswordResult, Provenance } from "../lib/types";
+import type { PassphraseResult, PasswordResult, Provenance, Receipt } from "../lib/types";
 import { EntropyMeter } from "./EntropyMeter";
 import { ProvenanceBadge } from "./ProvenanceBadge";
+import { ReceiptCard } from "./ReceiptCard";
 import { SecretDisplay } from "./SecretDisplay";
 import { Toggle } from "./Toggle";
 
@@ -15,6 +16,8 @@ export interface Generated {
   kind: Mode;
   entropyBits: number;
   provenance: Provenance;
+  receipt?: Receipt;
+  receiptSalt?: string;
 }
 
 const SEPARATORS = [
@@ -34,6 +37,7 @@ export function Generator({ onGenerated }: { onGenerated: (g: Generated) => void
   const [separator, setSeparator] = useState("-");
   const [capitalize, setCapitalize] = useState(false);
   const [addNumber, setAddNumber] = useState(false);
+  const [signed, setSigned] = useState(true);
   const [result, setResult] = useState<Generated | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -48,17 +52,19 @@ export function Generator({ onGenerated }: { onGenerated: (g: Generated) => void
       if (mode === "password") {
         const r = await apiGet<PasswordResult>(
           "/api/v2/password",
-          { length, ...charsets, exclude_ambiguous: excludeAmbiguous },
+          { length, ...charsets, exclude_ambiguous: excludeAmbiguous, receipt: signed },
           getToken,
         );
-        g = { value: r.password, kind: mode, entropyBits: r.entropy_bits, provenance: r.provenance };
+        g = { value: r.password, kind: mode, entropyBits: r.entropy_bits, provenance: r.provenance,
+          receipt: r.receipt, receiptSalt: r.receipt_salt };
       } else {
         const r = await apiGet<PassphraseResult>(
           "/api/v2/passphrase",
-          { words, separator, capitalize, add_number: addNumber },
+          { words, separator, capitalize, add_number: addNumber, receipt: signed },
           getToken,
         );
-        g = { value: r.passphrase, kind: mode, entropyBits: r.entropy_bits, provenance: r.provenance };
+        g = { value: r.passphrase, kind: mode, entropyBits: r.entropy_bits, provenance: r.provenance,
+          receipt: r.receipt, receiptSalt: r.receipt_salt };
       }
       setResult(g);
       onGenerated(g);
@@ -67,7 +73,7 @@ export function Generator({ onGenerated }: { onGenerated: (g: Generated) => void
     } finally {
       setLoading(false);
     }
-  }, [mode, length, charsets, excludeAmbiguous, words, separator, capitalize, addNumber, getToken, onGenerated]);
+  }, [mode, length, charsets, excludeAmbiguous, words, separator, capitalize, addNumber, signed, getToken, onGenerated]);
 
   // Clear a stale result when switching modes.
   useEffect(() => setResult(null), [mode]);
@@ -99,6 +105,7 @@ export function Generator({ onGenerated }: { onGenerated: (g: Generated) => void
         <div className="space-y-4">
           <ProvenanceBadge provenance={result.provenance} />
           <EntropyMeter bits={result.entropyBits} />
+          {result.receipt && <ReceiptCard receipt={result.receipt} salt={result.receiptSalt} />}
         </div>
       )}
       {error && <p role="alert" className="text-sm text-rose-500">{error}</p>}
@@ -144,6 +151,8 @@ export function Generator({ onGenerated }: { onGenerated: (g: Generated) => void
           </div>
         </div>
       )}
+
+      <Toggle label="Post-quantum signed receipt" checked={signed} onChange={setSigned} />
 
       <button type="button" className="btn-primary w-full py-3 text-base" onClick={generate}
         disabled={loading || (mode === "password" && noCharset)}>

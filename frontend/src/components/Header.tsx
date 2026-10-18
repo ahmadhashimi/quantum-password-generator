@@ -1,5 +1,5 @@
 import { SignInButton, UserButton, Show } from "@clerk/react";
-import { BarChart3, Moon, Sparkles, Sun } from "lucide-react";
+import { BarChart3, FileSearch, Gift, Moon, Sparkles, Sun } from "lucide-react";
 import { useAppAuth } from "../lib/auth";
 
 interface Props {
@@ -19,6 +19,12 @@ export function Header({ theme, onToggleTheme, onOpenAssistant, isAdmin }: Props
           <span>Quantum<span className="text-gradient">Pass</span></span>
         </a>
         <nav className="flex items-center gap-2">
+          <a href="#/draw" className="btn-ghost h-9 px-3" aria-label="Quantum draw">
+            <Gift className="size-4" aria-hidden /> <span className="hidden md:inline">Draw</span>
+          </a>
+          <a href="#/verify/" className="btn-ghost h-9 px-3" aria-label="Verify a receipt">
+            <FileSearch className="size-4" aria-hidden /> <span className="hidden md:inline">Verify</span>
+          </a>
           {isAdmin && (
             <a href="#/admin" className="btn-ghost h-9 px-3" aria-label="Admin dashboard">
               <BarChart3 className="size-4" /> <span className="hidden sm:inline">Admin</span>

@@ -14,16 +14,18 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from . import db
 from .api import assistant as assistant_api
+from .api import receipts as receipts_api
 from .api import routes, webhooks
 from .assistant.agent import Assistant, Limits
 from .config import Settings, get_settings
 from .entropy import EntropyService
 from .ratelimit import limiter
+from .receipts import Signer
 from .security import SecurityHeadersMiddleware, install_log_redaction
 
 
 def create_app(settings: Settings | None = None, entropy: EntropyService | None = None,
-               assistant: Assistant | None = None) -> FastAPI:
+               assistant: Assistant | None = None, signer: Signer | None = None) -> FastAPI:
     s = settings or get_settings()
 
     @asynccontextmanager
@@ -32,6 +34,7 @@ def create_app(settings: Settings | None = None, entropy: EntropyService | None 
         db.init_db()
         client = httpx.AsyncClient(headers={"user-agent": "quantum-password-generator/2"})
         app.state.entropy = entropy or EntropyService.from_settings(s, client)
+        app.state.signer = signer or Signer.load_or_create(s.signing_key_path, s.signing_keys)
         if app.state.entropy.harvester:
             app.state.entropy.harvester.start()
         app.state.assistant = assistant or (
@@ -55,6 +58,7 @@ def create_app(settings: Settings | None = None, entropy: EntropyService | None 
     app.include_router(routes.router)
     app.include_router(assistant_api.router)
     app.include_router(webhooks.router)
+    app.include_router(receipts_api.router)
 
     dist = Path(s.frontend_dist)
     if (dist / "index.html").exists():

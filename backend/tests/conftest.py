@@ -11,6 +11,7 @@ def _isolated_settings(tmp_path, monkeypatch):
     from app.config import get_settings
 
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'test.db'}")
+    monkeypatch.setenv("SIGNING_KEY_PATH", str(tmp_path / "signing_keys.json"))
     for var in ("ANU_API_KEY", "IBM_QUANTUM_TOKEN", "ANTHROPIC_API_KEY", "CLERK_SECRET_KEY", "CLERK_WEBHOOK_SECRET"):
         monkeypatch.delenv(var, raising=False)
     get_settings.cache_clear()
