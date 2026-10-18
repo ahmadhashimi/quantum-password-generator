@@ -12,13 +12,14 @@ import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 log = logging.getLogger(__name__)
 
 
 @dataclass
 class Chunk:
-    meta: dict
+    meta: dict[str, Any]
     data: bytearray = field(default_factory=bytearray)
 
 
@@ -38,6 +39,7 @@ class EntropyPool:
         return sum(len(c.data) for c in self._chunks)
 
     def _load(self) -> None:
+        assert self._path is not None
         try:
             saved = json.loads(self._path.read_text())
             self._chunks = [Chunk(c["meta"], bytearray(base64.b64decode(c["data"]))) for c in saved["chunks"]]
@@ -45,7 +47,7 @@ class EntropyPool:
             log.warning("Discarding entropy pool file without job metadata: %s", self._path)
             self._chunks = []
 
-    async def add(self, data: bytes, meta: dict) -> None:
+    async def add(self, data: bytes, meta: dict[str, Any]) -> None:
         async with self._lock:
             room = self._max - len(self)
             if room <= 0:
@@ -54,7 +56,7 @@ class EntropyPool:
             self.total_harvested += min(len(data), room)
             self._persist()
 
-    async def take(self, n: int) -> tuple[bytes, list[dict]] | None:
+    async def take(self, n: int) -> tuple[bytes, list[dict[str, Any]]] | None:
         """Remove n bytes (never reused) and return them with the metadata of every job they came from."""
         async with self._lock:
             if len(self) < n:

@@ -7,14 +7,15 @@ Works on PostgreSQL (production, managed by Alembic migrations) and SQLite (test
 import hashlib
 import json
 import threading
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import BigInteger, Column, Text, UniqueConstraint, delete, event, update
 from sqlalchemy.engine import Engine
-from sqlmodel import Field, Session, SQLModel, create_engine, func, select
+from sqlmodel import Field, Session, SQLModel, col, create_engine, func, select
 
 from .config import get_settings
 
@@ -233,9 +234,43 @@ def audit(actor: str, action: str, target: str | None = None, details: dict[str,
         s.commit()
 
 
+_throttle: dict[tuple[str, str, str | None], float] = {}
+_throttle_lock = threading.Lock()
+
+
+def audit_throttled(actor: str, action: str, target: str | None = None, details: dict[str, Any] | None = None,
+                    *, every_s: float = 600) -> None:
+    """audit(), at most once per (actor, action, target) per `every_s` in this process: for events a caller can
+    trigger repeatedly (denied admin access, an exhausted budget), so they can't flood the audit log."""
+    key, now = (actor, action, target), time.monotonic()
+    with _throttle_lock:
+        if now - _throttle.get(key, float("-inf")) < every_s:
+            return
+        if len(_throttle) > 10_000:
+            _throttle.clear()
+        _throttle[key] = now
+    audit(actor, action, target, details)
+
+
+def last_audit(action: str) -> dict[str, Any] | None:
+    with session() as s:
+        r = s.exec(select(AuditEvent).where(AuditEvent.action == action).order_by(col(AuditEvent.seq).desc())
+                   .limit(1)).first()
+    return None if r is None else {"seq": r.seq, "target": r.target, "details": json.loads(r.details)}
+
+
+def audit_times(action: str, target: str | None, within_s: float) -> list[float]:
+    """Unix times of recent events with this action and target (e.g. QPU jobs submitted in the last 24 h)."""
+    cutoff = _now() - timedelta(seconds=within_s)
+    with session() as s:
+        rows = s.exec(select(AuditEvent.ts).where(AuditEvent.action == action, AuditEvent.target == target,
+                                                  AuditEvent.ts >= cutoff)).all()
+    return [(ts if ts.tzinfo else ts.replace(tzinfo=UTC)).timestamp() for ts in rows]
+
+
 def list_audit(after_seq: int = 0, limit: int = 100) -> list[dict[str, Any]]:
     with session() as s:
-        rows = s.exec(select(AuditEvent).where(AuditEvent.seq > after_seq).order_by(AuditEvent.seq)
+        rows = s.exec(select(AuditEvent).where(AuditEvent.seq > after_seq).order_by(col(AuditEvent.seq))
                       .limit(min(limit, 500))).all()
     return [{"seq": r.seq, "ts": r.ts.isoformat(), "actor": r.actor, "action": r.action, "target": r.target,
              "details": json.loads(r.details), "prev_hash": r.prev_hash, "hash": r.hash} for r in rows]
@@ -246,7 +281,7 @@ def verify_audit_chain() -> dict[str, Any]:
     prev, count = "0" * 64, 0
     with session() as s:
         head = s.get(AuditHead, 1)
-        for r in s.exec(select(AuditEvent).order_by(AuditEvent.seq)):
+        for r in s.exec(select(AuditEvent).order_by(col(AuditEvent.seq))):
             count += 1
             if r.seq != count or r.prev_hash != prev or \
                     _event_hash(prev, r.seq, r.ts, r.actor, r.action, r.target, r.details) != r.hash:
@@ -328,7 +363,7 @@ def assistant_spend(since: datetime, user_id: str | None = None) -> float:
     if user_id is not None:
         q = q.where(UsageEvent.user_id == user_id)
     with session() as s:
-        return float(s.exec(q).one())
+        return float(cast(float, s.exec(q).one()))
 
 
 def assistant_spend_today(user_id: str | None = None) -> float:
@@ -378,7 +413,7 @@ def admin_stats() -> dict[str, Any]:
         users = s.exec(select(func.count()).select_from(User).where(User.deleted == False)).one()  # noqa: E712
         events = {k: int(c) for k, c in s.exec(select(UsageEvent.kind, func.count()).group_by(UsageEvent.kind))}
         quantum = s.exec(select(func.count()).where(UsageEvent.quantum)).one()
-        ai_cost = float(s.exec(select(func.coalesce(func.sum(UsageEvent.cost_usd), 0.0))).one())
+        ai_cost = float(cast(float, s.exec(select(func.coalesce(func.sum(UsageEvent.cost_usd), 0.0))).one()))
         recent = s.exec(select(User).where(User.deleted == False)  # noqa: E712
                         .order_by(User.last_seen.desc()).limit(20)).all()  # type: ignore[attr-defined]
         daily = s.exec(select(day, func.count()).where(UsageEvent.created_at >= _start_of_day() - timedelta(days=29))
@@ -397,6 +432,16 @@ def admin_stats() -> dict[str, Any]:
                          for u in recent],
         "draws_needing_investigation": list(investigate),
     }
+
+
+def draws_needing_investigation() -> list[dict[str, Any]]:
+    """Interrupted draws for operators: timing and seed provenance, never the seed itself."""
+    with session() as s:
+        rows = s.exec(select(Draw).where(Draw.status == DRAW_INVESTIGATE).order_by(col(Draw.created_at))).all()
+    return [{"draw_id": d.id, "owner_id": d.owner_id, "title": d.title, "entries_count": d.entries_count,
+             "winners": d.winners, "commit_receipt_id": d.commit_receipt_id, "created_at": d.created_at.isoformat(),
+             "run_started_at": d.run_started_at.isoformat() if d.run_started_at else None,
+             "seed_provenance": json.loads(d.seed_provenance) if d.seed_provenance else None} for d in rows]
 
 
 # --- receipts ---------------------------------------------------------------------------------------------
@@ -444,10 +489,10 @@ def purge_anonymous_receipts(days: int = 30) -> int:
     """Retention: receipts not tied to an account expire after `days` (except those referenced by draws)."""
     with session() as s:
         referenced = select(Draw.commit_receipt_id).union(
-            select(Draw.result_receipt_id).where(Draw.result_receipt_id.is_not(None)))  # type: ignore[union-attr]
-        res = s.exec(delete(Receipt).where(Receipt.user_id.is_(None),  # type: ignore[union-attr]
-                                           Receipt.created_at < _now() - timedelta(days=days),
-                                           Receipt.id.not_in(referenced)))  # type: ignore[attr-defined]
+            select(Draw.result_receipt_id).where(col(Draw.result_receipt_id).is_not(None)))
+        res = s.exec(delete(Receipt).where(col(Receipt.user_id).is_(None),
+                                           col(Receipt.created_at) < _now() - timedelta(days=days),
+                                           col(Receipt.id).not_in(referenced)))
         s.commit()
         return int(res.rowcount or 0)
 
@@ -474,7 +519,7 @@ def idempotency_row(owner_id: str, endpoint: str, key: str, request_hash: str, r
 
 def purge_idempotency(days: int = 7) -> int:
     with session() as s:
-        res = s.exec(delete(IdempotencyRecord).where(IdempotencyRecord.created_at < _now() - timedelta(days=days)))
+        res = s.exec(delete(IdempotencyRecord).where(col(IdempotencyRecord.created_at) < _now() - timedelta(days=days)))
         s.commit()
         return int(res.rowcount or 0)
 
@@ -510,8 +555,8 @@ def seed_draw(draw_id: str, owner_id: str | None, seed_hex: str, provenance: dic
     After this commits, the outcome is fixed: winners are a pure function of (seed, canonical entries).
     """
     with audit_lock(), session() as s:
-        res = s.exec(update(Draw).where(Draw.id == draw_id, Draw.status == DRAW_COMMITTED,  # type: ignore[arg-type]
-                                        Draw.owner_id == owner_id)
+        res = s.exec(update(Draw).where(col(Draw.id) == draw_id, col(Draw.status) == DRAW_COMMITTED,
+                                        col(Draw.owner_id) == owner_id)
                      .values(status=DRAW_SEEDED, seed_hex=seed_hex, seed_provenance=_canonical(provenance),
                              run_started_at=_now()))
         if res.rowcount != 1:

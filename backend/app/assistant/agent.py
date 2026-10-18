@@ -17,6 +17,7 @@ from typing import Any
 
 import anyio
 from anthropic import AsyncAnthropic, beta_async_tool
+from anthropic.lib.tools import BetaAsyncFunctionTool
 from starlette.concurrency import run_in_threadpool
 
 from .. import db
@@ -145,7 +146,7 @@ class TokenUsage:
         self.usd += (inp * p_in + out * p_out + write * p_write + read * p_read) / 1e6
 
 
-def _sse(event: str, data: dict) -> str:
+def _sse(event: str, data: dict[str, Any]) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
 
@@ -193,8 +194,12 @@ class Assistant:
         """Check spend caps before calling the model. Password generation is never affected."""
         lim = self.limits
         if await run_in_threadpool(db.assistant_spend_this_month) >= lim.monthly_budget_usd:
+            await run_in_threadpool(db.audit_throttled, "system", "budget.kill_switch", "assistant_monthly",
+                                    {"cap_usd": lim.monthly_budget_usd}, every_s=86_400)
             return "The assistant has reached this month's usage budget."
         if await run_in_threadpool(db.assistant_spend_today) >= lim.daily_budget_usd:
+            await run_in_threadpool(db.audit_throttled, "system", "budget.kill_switch", "assistant_daily",
+                                    {"cap_usd": lim.daily_budget_usd}, every_s=3_600)
             return "The assistant has reached today's usage budget. Please try again tomorrow."
         if await run_in_threadpool(db.assistant_spend_today, user_id) >= lim.user_daily_budget_usd:
             return "You've reached today's assistant usage limit."
@@ -202,7 +207,7 @@ class Assistant:
             return f"You've reached today's limit of {lim.daily_messages_per_user} assistant messages."
         return None
 
-    def _tools(self, user_id: str | None, outbox: list[dict]) -> list:
+    def _tools(self, user_id: str | None, outbox: list[dict[str, Any]]) -> list[BetaAsyncFunctionTool[Any]]:
         entropy = self.entropy
         issued = {"n": 0}
 
@@ -212,7 +217,8 @@ class Assistant:
                 return json.dumps({"error": f"Limit: at most {MAX_SECRETS_PER_MESSAGE} secrets per message."})
             return None
 
-        async def _emit_secret(kind: str, value: str, bits: float, prov: dict, **meta: Any) -> dict:
+        async def _emit_secret(kind: str, value: str, bits: float, prov: dict[str, Any],
+                               **meta: Any) -> dict[str, Any]:
             sid = secrets.token_urlsafe(8)
             outbox.append({"secret_id": sid, "kind": kind, "value": value, "entropy_bits": round(bits, 2),
                            "provenance": prov, **meta})
@@ -299,7 +305,7 @@ class Assistant:
                 return
             conv.turns += 1
             conv.messages.append({"role": "user", "content": text})
-            outbox: list[dict] = []
+            outbox: list[dict[str, Any]] = []
             try:
                 async with asyncio.timeout(STREAM_TIMEOUT_S):
                     runner = self.client.beta.messages.tool_runner(

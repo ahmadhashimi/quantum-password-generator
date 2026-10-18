@@ -181,3 +181,15 @@ def test_usage_endpoint_reports_quotas(client):
     client.get("/api/v2/password")
     u = client.get("/api/v2/me/usage").json()
     assert u["today"]["password"] == 1 and u["quotas"]["draws_per_day"] == 50
+
+
+def test_investigation_list_shows_timing_not_seed(client, monkeypatch):
+    draw_id = commit(client).json()["draw_id"]
+    monkeypatch.setattr(db, "finish_draw_tx", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("crash")))
+    with pytest.raises(RuntimeError):
+        client.post(f"/api/v2/draws/{draw_id}/run")
+    db.mark_stuck_draws()
+    listed = client.get("/api/v2/admin/draws/investigate").json()["draws"]
+    assert [d["draw_id"] for d in listed] == [draw_id]
+    assert listed[0]["run_started_at"] and listed[0]["seed_provenance"]["sources"] == ["lfd"]
+    assert db.get_draw(draw_id).seed_hex not in str(listed)

@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from ..assistant.agent import Assistant
 from ..auth import CurrentUser, require_user
 from ..ratelimit import assistant_limit, limiter
 
@@ -15,8 +16,8 @@ class ChatRequest(BaseModel):
     conversation_id: str | None = Field(default=None, max_length=64)
 
 
-def _assistant(request: Request):
-    a = getattr(request.app.state, "assistant", None)
+def _assistant(request: Request) -> Assistant:
+    a: Assistant | None = getattr(request.app.state, "assistant", None)
     if a is None:
         raise HTTPException(503, "Assistant is not configured")
     return a
@@ -24,15 +25,17 @@ def _assistant(request: Request):
 
 @router.post("/api/v2/assistant/chat")
 @limiter.limit(assistant_limit)
-async def chat(request: Request, body: ChatRequest, user: Annotated[CurrentUser, Depends(require_user)]):
+async def chat(request: Request, body: ChatRequest,
+               user: Annotated[CurrentUser, Depends(require_user)]) -> StreamingResponse:
     assistant = _assistant(request)
     return StreamingResponse(assistant.chat(user.id, body.conversation_id, body.message),
                              media_type="text/event-stream",
                              headers={"X-Accel-Buffering": "no"})
 
 
-@router.delete("/api/v2/assistant/conversations/{conv_id}")
+@router.delete("/api/v2/assistant/conversations/{conv_id}", response_model=None)
 @limiter.limit(assistant_limit)
-async def delete_conversation(request: Request, conv_id: str, user: Annotated[CurrentUser, Depends(require_user)]):
+async def delete_conversation(request: Request, conv_id: str,
+                              user: Annotated[CurrentUser, Depends(require_user)]) -> dict[str, bool]:
     _assistant(request).store.delete(conv_id, user.id)
     return {"ok": True}

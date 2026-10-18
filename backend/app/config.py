@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     allowed_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173", "http://localhost:8000"])
     # Host header allowlist; also blocks DNS-rebinding attacks against a local dev server. Set your domain in prod.
     allowed_hosts: list[str] = Field(default_factory=lambda: ["localhost", "127.0.0.1"])
+    log_format: Literal["json", "text"] | None = None  # default: text in development, JSON lines otherwise
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     admin_require_mfa: bool = True  # admin API needs a second factor verified within the last hour
     frontend_dist: str = "../frontend/dist"
 

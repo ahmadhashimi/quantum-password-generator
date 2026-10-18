@@ -24,6 +24,7 @@ import secrets
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
@@ -49,7 +50,7 @@ def unb64(text: str) -> bytes:
     return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
 
 
-def canonical(payload: dict) -> bytes:
+def canonical(payload: dict[str, Any]) -> bytes:
     """Deterministic encoding that both the signer and any verifier reproduce exactly (NaN/Infinity rejected)."""
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode()
 
@@ -72,7 +73,7 @@ class Signer:
         return cls(Ed25519PrivateKey.generate(), MLDSA65PrivateKey.generate())
 
     @classmethod
-    def from_seeds(cls, seeds: dict) -> "Signer":
+    def from_seeds(cls, seeds: dict[str, str]) -> "Signer":
         return cls(Ed25519PrivateKey.from_private_bytes(unb64(seeds["ed25519"])),
                    MLDSA65PrivateKey.from_seed_bytes(unb64(seeds["ml-dsa-65"])))
 
@@ -108,15 +109,15 @@ class Signer:
             raise PermissionError(f"Signing key {key_path} must be owned by this user with mode 0600")
         return cls.from_seeds(json.loads(key_path.read_text()))
 
-    def seeds(self) -> dict:
+    def seeds(self) -> dict[str, str]:
         return {"ed25519": b64(self.ed25519.private_bytes_raw()), "ml-dsa-65": b64(self.mldsa.private_bytes_raw())}
 
-    def public_keys(self) -> dict:
+    def public_keys(self) -> dict[str, str]:
         ed = self.ed25519.public_key().public_bytes_raw()
         ml = self.mldsa.public_key().public_bytes_raw()
         return {"key_id": key_id_for(ed, ml), "ed25519": b64(ed), "ml-dsa-65": b64(ml)}
 
-    def sign(self, payload: dict) -> dict:
+    def sign(self, payload: dict[str, Any]) -> dict[str, str]:
         msg = SIGNING_DOMAIN + canonical(payload)
         return {"ed25519": b64(self.ed25519.sign(msg)), "ml-dsa-65": b64(self.mldsa.sign(msg))}
 
@@ -129,9 +130,9 @@ class Keyring:
     its revoked_at time are rejected.
     """
 
-    def __init__(self, active: Signer, retired: list[dict] | None = None):
+    def __init__(self, active: Signer, retired: list[dict[str, Any]] | None = None):
         self.active = active
-        self._keys: dict[str, dict] = {}
+        self._keys: dict[str, dict[str, Any]] = {}
         for entry in retired or []:
             k = self._validated(entry)
             self._keys[k["key_id"]] = k
@@ -139,7 +140,7 @@ class Keyring:
         self._keys[pub["key_id"]] = {**pub, "status": "active"}
 
     @staticmethod
-    def _validated(entry: dict) -> dict:
+    def _validated(entry: dict[str, Any]) -> dict[str, Any]:
         """Refuse malformed or mislabelled retired keys at startup instead of failing open later."""
         try:
             ed, ml = unb64(entry["ed25519"]), unb64(entry["ml-dsa-65"])
@@ -161,14 +162,15 @@ class Keyring:
     def from_settings(cls, path: str | None, env_seeds: str | None, retired_json: str | None) -> "Keyring":
         return cls(Signer.load_or_create(path, env_seeds), json.loads(retired_json) if retired_json else [])
 
-    def public(self) -> list[dict]:
+    def public(self) -> list[dict[str, Any]]:
         return list(self._keys.values())
 
-    def get(self, key_id: object) -> dict | None:
+    def get(self, key_id: object) -> dict[str, Any] | None:
         return self._keys.get(key_id) if isinstance(key_id, str) else None
 
 
-def verify_signatures(payload: dict, signatures: dict, public_keys: dict) -> dict[str, bool]:
+def verify_signatures(payload: dict[str, Any], signatures: dict[str, Any],
+                      public_keys: dict[str, Any]) -> dict[str, bool]:
     results = {"ed25519": False, "ml-dsa-65": False}
     try:
         msg = SIGNING_DOMAIN + canonical(payload)
@@ -187,8 +189,8 @@ def verify_signatures(payload: dict, signatures: dict, public_keys: dict) -> dic
 _NO_SIGS = {"ed25519": False, "ml-dsa-65": False}
 
 
-def _provenance_verdict(payload: dict) -> dict:
-    prov = payload.get("provenance") if isinstance(payload.get("provenance"), dict) else {}
+def _provenance_verdict(payload: dict[str, Any]) -> dict[str, Any]:
+    prov: dict[str, Any] = p if isinstance(p := payload.get("provenance"), dict) else {}
     jobs = prov.get("ibm_jobs") or []
     return {
         "type": "operator-asserted",
@@ -209,7 +211,7 @@ QUANTUM_EVIDENCE_VERDICT = {
 }
 
 
-def verify_receipt(payload: dict, signatures: dict, keyring: Keyring) -> dict:
+def verify_receipt(payload: dict[str, Any], signatures: dict[str, Any], keyring: Keyring) -> dict[str, Any]:
     """Full check, in order: supported version and exact schema, known key, both signatures, revocation.
 
     Returns the overall `valid` flag plus three separate verdicts (integrity / provenance / quantum evidence).
@@ -218,7 +220,7 @@ def verify_receipt(payload: dict, signatures: dict, keyring: Keyring) -> dict:
     base = {"schema_valid": schema_ok, "schema_error": schema_error,
             "version_supported": schema_error != "unsupported_version"}
     if not schema_ok:
-        reason = "unsupported_version" if schema_error == "unsupported_version" else "schema_invalid"
+        reason: str | None = "unsupported_version" if schema_error == "unsupported_version" else "schema_invalid"
         return {**base, "valid": False, "reason": reason, "signatures": dict(_NO_SIGS), "key_status": None,
                 "integrity": {"valid": False, "reason": reason}, "provenance": None,
                 "quantum_evidence": QUANTUM_EVIDENCE_VERDICT}
@@ -236,9 +238,9 @@ def verify_receipt(payload: dict, signatures: dict, keyring: Keyring) -> dict:
             "provenance": _provenance_verdict(payload), "quantum_evidence": QUANTUM_EVIDENCE_VERDICT}
 
 
-def build_receipt(signer: Signer, kind: str, provenance: dict, *, entropy_bits: float | None = None,
-                  secret_value: str | None = None, public_result: dict | None = None,
-                  details: dict | None = None) -> tuple[dict, str | None]:
+def build_receipt(signer: Signer, kind: str, provenance: dict[str, Any], *, entropy_bits: float | None = None,
+                  secret_value: str | None = None, public_result: dict[str, Any] | None = None,
+                  details: dict[str, Any] | None = None) -> tuple[dict[str, Any], str | None]:
     """Return (signed receipt, salt). The salt is only set for secret results and must go to the user alone."""
     salt = secrets.token_bytes(32) if secret_value is not None else None
     payload = {
@@ -262,7 +264,7 @@ def build_receipt(signer: Signer, kind: str, provenance: dict, *, entropy_bits: 
         b64(salt) if salt else None)
 
 
-def check_commitment(payload: dict, value: str, salt_b64: str) -> bool:
+def check_commitment(payload: dict[str, Any], value: str, salt_b64: str) -> bool:
     expected = payload.get("commitment")
     if not isinstance(expected, str) or len(expected) != 128:
         return False

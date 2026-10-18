@@ -1,7 +1,4 @@
-"""HTTP hardening: security headers, no-store on secrets, log redaction."""
-
-import logging
-import re
+"""HTTP hardening: security headers, no-store on secrets, request body limits."""
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -69,23 +66,6 @@ class SecurityHeadersMiddleware:
             await send(message)
 
         await self.app(scope, receive, send_wrapper)
-
-
-_SECRET_RE = re.compile(r'("?(password|passphrase|value|quantum_password)"?\s*[:=]\s*)"[^"]*"', re.I)
-
-
-class RedactSecretsFilter(logging.Filter):
-    def filter(self, record: logging.LogRecord) -> bool:
-        msg = record.getMessage()
-        if _SECRET_RE.search(msg):
-            record.msg, record.args = _SECRET_RE.sub(r'\1"[REDACTED]"', msg), ()
-        return True
-
-
-def install_log_redaction() -> None:
-    f = RedactSecretsFilter()
-    for name in ("", "uvicorn", "uvicorn.access", "uvicorn.error", "app"):
-        logging.getLogger(name).addFilter(f)
 
 
 class BodySizeLimitMiddleware:

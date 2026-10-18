@@ -8,12 +8,13 @@ exactly which sources contributed so the UI never claims quantum when it fell ba
 import asyncio
 import time
 from dataclasses import dataclass, field
+from typing import Any
 
 import httpx
 
 from ..config import Settings
 from .anu import ANUProvider
-from .base import EntropyError, EntropyProvider
+from .base import EntropyError, EntropyProvider, EventHook, no_event
 from .health import HealthMonitor
 from .ibm import IBMHarvester
 from .lfd import LfDProvider
@@ -34,10 +35,10 @@ class Provenance:
     quantum: bool
     quantum_bytes: int
     failures: dict[str, str] = field(default_factory=dict)
-    ibm_jobs: list[dict] | None = None
+    ibm_jobs: list[dict[str, Any]] | None = None
     timestamp: float = field(default_factory=time.time)
 
-    def as_dict(self) -> dict:
+    def as_dict(self) -> dict[str, Any]:
         d = {
             "sources": self.sources,
             "quantum": self.quantum,
@@ -96,13 +97,16 @@ class _ProviderState:
             return "failing"
         return "ok" if self.successes else "untested"
 
-    def record_failure(self, reason: str, cooldown_s: float | None = None) -> None:
+    def record_failure(self, reason: str, cooldown_s: float | None = None) -> float | None:
+        """Count a failure; returns the cooldown if this failure opened the circuit breaker."""
         self.consecutive_failures += 1
         self.last_error = reason
+        was_open = not self.usable
         if cooldown_s:  # auth/quota refusal: retrying soon only burns quota and annoys the provider
             self.open_until = time.monotonic() + cooldown_s
         elif self.consecutive_failures >= BREAKER_THRESHOLD:
             self.open_until = time.monotonic() + BREAKER_COOLDOWN_S
+        return None if was_open or self.usable else self.open_until - time.monotonic()
 
     def record_success(self) -> None:
         self.consecutive_failures = 0
@@ -117,12 +121,13 @@ class EntropyService:
         self._live = [_ProviderState(p, HealthMonitor(LIVE_MIN_ENTROPY), min_interval_s=intervals.get(p.name, 0.0))
                       for p in live]
         self.harvester = harvester
+        self.on_event: EventHook = no_event
         self._pool_quota = pool_seeds_per_user_per_day
         self._pool_used: dict[tuple[str, str], int] = {}
 
     @classmethod
     def from_settings(cls, s: Settings, client: httpx.AsyncClient) -> "EntropyService":
-        live = [
+        live: list[EntropyProvider] = [
             ANUProvider(client, s.anu_api_key, s.anu_api_url, s.provider_timeout_s),
             LfDProvider(client, s.lfd_api_url, s.provider_timeout_s),
         ]
@@ -145,14 +150,19 @@ class EntropyService:
             except EntropyError as e:
                 failures[st.provider.name] = str(e)
                 if not e.transient:
-                    st.record_failure(str(e), e.cooldown_s)
+                    await self._breaker_event(st, st.record_failure(str(e), e.cooldown_s), "error")
                 return
             if reason := st.monitor.check(data):
-                st.record_failure(f"health test failed: {reason}")
+                await self._breaker_event(st, st.record_failure(f"health test failed: {reason}"), "health_test")
                 failures[st.provider.name] = f"health test failed: {reason}"
                 return
             st.record_success()
             st.buffer.extend(data)
+
+    async def _breaker_event(self, st: _ProviderState, cooldown: float | None, cause: str) -> None:
+        if cooldown is not None:  # coarse cause only: raw provider errors can carry account details
+            await self.on_event("provider.breaker_open", st.provider.name,
+                                {"cause": cause, "cooldown_s": round(cooldown)})
 
     async def _from_live(self, failures: dict[str, str]) -> tuple[str, bytes] | None:
         for st in self._live:
@@ -176,8 +186,8 @@ class EntropyService:
         self._pool_used[key] = self._pool_used.get(key, 0) + 1
         return True
 
-    async def _from_pool(self, user_id: str | None) -> tuple[bytes, list[dict]] | None:
-        if not self._pool_allowed(user_id):
+    async def _from_pool(self, user_id: str | None) -> tuple[bytes, list[dict[str, Any]]] | None:
+        if not self._pool_allowed(user_id) or self.harvester is None:
             return None
         return await self.harvester.pool.take(SEED_BYTES)
 
@@ -204,7 +214,7 @@ class EntropyService:
                           failures=failures, ibm_jobs=ibm_jobs)
         return EntropyResult(KeyStream(derive_key(extra)), prov)
 
-    def status(self, detail: bool = False) -> dict:
+    def status(self, detail: bool = False) -> dict[str, Any]:
         """Public view hides raw errors and job ids (they can leak account details); admins get everything."""
         full = self._status()
         if detail:
@@ -214,7 +224,7 @@ class EntropyService:
         return {**full, "providers": [{k: p[k] for k in keep if k in p} | {"error": bool(p.get("last_error"))}
                                       for p in full["providers"]]}
 
-    def _status(self) -> dict:
+    def _status(self) -> dict[str, Any]:
         providers = [
             {
                 "name": st.provider.name,

@@ -74,19 +74,19 @@ def entries_hash(entries: list[str]) -> str:
     return hashlib.sha256(json.dumps(entries, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
 
 
-@router.get("/api/v2/receipts/keys")
-@router.get("/.well-known/quantumpass-keys.json", include_in_schema=False)
+@router.get("/api/v2/receipts/keys", response_model=None)
+@router.get("/.well-known/quantumpass-keys.json", include_in_schema=False, response_model=None)
 @limiter.limit(general_limit)
-async def signing_keys(request: Request):
+async def signing_keys(request: Request) -> dict[str, Any]:
     return {"algorithms": ["ed25519", "ml-dsa-65"], "keys": get_keyring(request).public()}
 
 
 RECEIPT_ID = re.compile(r"^[A-Za-z0-9_-]{16}$")
 
 
-@router.get("/api/v2/receipts/{receipt_id}")
+@router.get("/api/v2/receipts/{receipt_id}", response_model=None)
 @limiter.limit(general_limit)
-async def get_receipt(request: Request, receipt_id: str):
+async def get_receipt(request: Request, receipt_id: str) -> dict[str, Any]:
     if not RECEIPT_ID.match(receipt_id):
         raise HTTPException(404, "Receipt not found")
     r = await run_in_threadpool(db.get_receipt, receipt_id)
@@ -115,9 +115,10 @@ def _draw_details(payload: dict[str, Any]) -> dict[str, Any]:
     return details if isinstance(details, dict) else {}
 
 
-@router.post("/api/v2/receipts/verify")
+@router.post("/api/v2/receipts/verify", response_model=None)
 @limiter.limit(general_limit)
-async def verify(request: Request, body: VerifyRequest):
+async def verify(request: Request, body: VerifyRequest) -> dict[str, Any]:
+    receipt: dict[str, Any] | None
     if body.receipt:
         receipt = body.receipt.model_dump()
     elif body.receipt_id and RECEIPT_ID.match(body.receipt_id):
@@ -225,11 +226,12 @@ def _replay(owner: str | None, endpoint: str, key: str | None, request_hash: str
                         headers={"Idempotent-Replayed": "true"})
 
 
-@router.post("/api/v2/draws")
+@router.post("/api/v2/draws", response_model=None)
 @limiter.limit(general_limit)
 async def commit_draw(request: Request, body: DrawCommit, user: MaybeUser,
                       s: Annotated[Settings, Depends(get_settings)],
-                      idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None):
+                      idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+                      ) -> JSONResponse | dict[str, Any]:
     owner = _owner(user, s)
     key = _idem_key(idempotency_key)
     req_hash = db.request_fingerprint("POST /api/v2/draws", body.model_dump())
@@ -240,8 +242,8 @@ async def commit_draw(request: Request, body: DrawCommit, user: MaybeUser,
     if await run_in_threadpool(db.draws_today, owner) >= DRAWS_PER_USER_PER_DAY:
         raise HTTPException(429, f"Daily limit of {DRAWS_PER_USER_PER_DAY} draws reached")
     draw_id = secrets.token_urlsafe(12)
-    details = {"draw_id": draw_id, "title": body.title, "entries_count": len(body.entries),
-               "entries_sha256": entries_hash(body.entries), "winners": body.winners}
+    details: dict[str, Any] = {"draw_id": draw_id, "title": body.title, "entries_count": len(body.entries),
+                               "entries_sha256": entries_hash(body.entries), "winners": body.winners}
     no_randomness = {"sources": [], "quantum": False, "quantum_bytes": 0, "mixed_with": "none"}
     receipt, _ = build_receipt(get_signer(request), "draw_commit", no_randomness, details=details)
     rid = receipt["payload"]["receipt_id"]
@@ -280,10 +282,11 @@ async def _existing_outcome(draw: db.Draw) -> JSONResponse:
     return JSONResponse({"detail": detail, "status": draw.status}, status_code=409)
 
 
-@router.post("/api/v2/draws/{draw_id}/run")
+@router.post("/api/v2/draws/{draw_id}/run", response_model=None)
 @limiter.limit(general_limit)
 async def run_draw(request: Request, draw_id: str, user: MaybeUser, s: Annotated[Settings, Depends(get_settings)],
-                   idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None):
+                   idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+                   ) -> JSONResponse | dict[str, Any]:
     owner = _owner(user, s)
     key = _idem_key(idempotency_key)
     if not RECEIPT_ID.match(draw_id):

@@ -11,7 +11,9 @@ so usage is charged only there (keep it an Open Plan instance to stay free).
 import asyncio
 import logging
 import time
+from typing import Any
 
+from .base import EventHook, no_event
 from .health import HealthMonitor
 from .mixer import condition
 from .pool import EntropyPool
@@ -48,9 +50,14 @@ class IBMHarvester:
         self.last_job_id: str | None = None
         self.last_harvest_at: float | None = None
         self.last_error: str | None = None
-        self._task: asyncio.Task | None = None
+        self._task: asyncio.Task[None] | None = None
         self._max_jobs = max_jobs_per_day
         self._job_times: list[float] = []
+        self.on_event: EventHook = no_event
+
+    def restore_job_times(self, times: list[float]) -> None:
+        """Seed the rolling 24h job cap from the audit log, so a restart can't reset it and overspend QPU time."""
+        self._job_times = sorted(set(self._job_times) | set(times))
 
     @property
     def configured(self) -> bool:
@@ -86,6 +93,9 @@ class IBMHarvester:
         if self.jobs_last_24h >= self._max_jobs:
             raise RuntimeError(f"daily QPU job cap reached ({self._max_jobs})")
         self._job_times.append(time.time())
+        # Recorded before the job runs, so a job that fails or outlives a crash still counts against the cap.
+        await self.on_event("provider.ibm_job_submitted", self.name,
+                            {"backend": self._backend_name or "least_busy", "shots": self._shots})
         bitstrings, backend, job_id = await asyncio.to_thread(self._run_job)
         return await self.ingest(bitstrings, backend, job_id)
 
@@ -94,12 +104,15 @@ class IBMHarvester:
         failure = self.monitor.check(raw)
         if failure:
             self.last_error = f"health test failed: {failure}"
+            await self.on_event("provider.health_failed", self.name, {"backend": backend, "job_id": job_id})
             return 0
         cooked = condition(raw)
         await self.pool.add(cooked, {"backend": backend, "job_id": job_id,
                                      "mode": "simulator" if self.simulator else "hardware"})
         self.last_backend, self.last_job_id = backend, job_id
         self.last_harvest_at, self.last_error = time.time(), None
+        await self.on_event("provider.ibm_harvest", self.name,
+                            {"backend": backend, "job_id": job_id, "conditioned_bytes": len(cooked)})
         log.info("IBM harvest: %d raw -> %d conditioned bytes from %s", len(raw), len(cooked), backend)
         return len(cooked)
 
@@ -118,7 +131,7 @@ class IBMHarvester:
         return sample_backend(backend, self._shots)
 
 
-def sample_backend(backend, shots: int, n_qubits: int | None = None) -> tuple[list[str], str, str | None]:
+def sample_backend(backend: Any, shots: int, n_qubits: int | None = None) -> tuple[list[str], str, str | None]:
     """Hadamard every qubit, measure all, return one bitstring per shot (job mode — works on the Open Plan)."""
     from qiskit import QuantumCircuit
     from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager

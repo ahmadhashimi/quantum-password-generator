@@ -1,4 +1,13 @@
-from typing import Protocol
+from collections.abc import Awaitable, Callable
+from typing import Any, Protocol
+
+# Operational events (breaker opened, QPU job submitted, ...) for the audit log: (action, target, details).
+# The entropy package doesn't touch the database; the app wires this to db.audit at startup.
+EventHook = Callable[[str, str | None, dict[str, Any]], Awaitable[None]]
+
+
+async def no_event(action: str, target: str | None, details: dict[str, Any]) -> None:
+    return None
 
 
 class EntropyError(Exception):

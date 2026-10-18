@@ -232,3 +232,31 @@ def test_one_stream_per_user_at_a_time():
     db.init_db()
     first, second, other = asyncio.run(scenario())
     assert first[0] is not None and second[0] is None and "wait" in second[1] and other[0] is not None
+
+
+@pytest.mark.parametrize("model,fallback", [("claude-sonnet-5-5", True), ("claude-opus-5-5", True),
+                                            ("claude-haiku-5-5", False)])
+def test_request_shape_per_model(model, fallback):
+    """Sonnet/Opus use server-side refusal fallback; Haiku 5.5 has none, so it must not send the parameter."""
+    seen = []
+
+    def transport(request: httpx2.Request) -> httpx2.Response:
+        seen.append((dict(request.headers), json.loads(request.content)))
+        return httpx2.Response(200, json=msg([{"type": "text", "text": "Hi"}], "end_turn"))
+
+    entropy = EntropyService([FakeProvider("lfd")])
+    http = httpx2.AsyncClient(transport=httpx2.MockTransport(transport))
+    assistant = Assistant(AsyncAnthropic(api_key="test", max_retries=0, http_client=http), model, entropy)
+    with TestClient(create_app(settings=get_settings(), entropy=entropy, assistant=assistant)) as c:
+        c.post("/api/v2/assistant/chat", json={"message": "hi"})
+    headers, body = seen[0]
+    assert body["model"] == model and body["output_config"] == {"effort": "low"}
+    assert body["thinking"] == {"type": "adaptive"}
+    assert ("fallbacks" in body) is fallback
+    assert ("server-side-fallback-2026-07-01" in headers.get("anthropic-beta", "")) is fallback
+
+
+def test_default_model_is_sonnet():
+    from app.config import Settings
+
+    assert Settings().assistant_model == "claude-sonnet-5-5"

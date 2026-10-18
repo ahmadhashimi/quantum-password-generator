@@ -85,8 +85,10 @@ async def require_user(user: CurrentUser | None = Depends(optional_user)) -> Cur
 async def require_admin(user: CurrentUser = Depends(require_user),
                         s: Settings = Depends(get_settings)) -> CurrentUser:
     if not user.is_admin:
+        await run_in_threadpool(db.audit_throttled, user.id, "admin.denied", None, {"reason": "not_admin"})
         raise HTTPException(403, "Admin only")
     mfa_ok = user.second_factor_age_min is not None and user.second_factor_age_min <= 60
     if s.admin_require_mfa and user is not DEV_USER and not mfa_ok:
+        await run_in_threadpool(db.audit_throttled, user.id, "admin.denied", None, {"reason": "mfa_required"})
         raise HTTPException(403, "Admin access requires a second factor verified in the last hour")
     return user
