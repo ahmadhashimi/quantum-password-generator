@@ -43,7 +43,7 @@ RECEIPT_ID = re.compile(r"^[A-Za-z0-9_-]{16}$")
 KEY_ID = re.compile(r"^[0-9a-f]{16}$")
 HEX128 = re.compile(r"^[0-9a-f]{128}$")
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
-LINE_BREAKS = {" ", " ", "\x85"}
+LINE_BREAKS = {"\u2028", "\u2029", "\x85"}
 CLOCK_SKEW_S = 300
 
 
