@@ -153,6 +153,8 @@ def init_db() -> None:
 
 def reset_engine() -> None:
     global _engine
+    if _engine is not None:
+        _engine.dispose()
     _engine = None
 
 
