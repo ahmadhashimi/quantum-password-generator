@@ -226,6 +226,18 @@ def _calculate_result(draw: db.Draw, signer) -> tuple[dict, list[dict]]:
     return receipt, public["winners"]
 
 
+@router.get("/api/v2/admin/audit")
+@limiter.limit(general_limit)
+async def audit_events(request: Request, user: Annotated[CurrentUser, Depends(require_admin)]):
+    return {"events": await run_in_threadpool(db.audit_events_recent)}
+
+
+@router.get("/api/v2/admin/audit/verify")
+@limiter.limit(general_limit)
+async def audit_integrity(request: Request, user: Annotated[CurrentUser, Depends(require_admin)]):
+    return await run_in_threadpool(db.verify_audit_chain)
+
+
 @router.get("/api/v2/admin/draws/interrupted")
 @limiter.limit(general_limit)
 async def interrupted_draws(request: Request, user: Annotated[CurrentUser, Depends(require_admin)]):
