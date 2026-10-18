@@ -33,6 +33,9 @@ def create_app(settings: Settings | None = None, entropy: EntropyService | None 
     async def lifespan(app: FastAPI):
         install_log_redaction()
         db.init_db()
+        recovered = db.mark_interrupted_draws()
+        if recovered:
+            logging.getLogger(__name__).warning("%d interrupted draws require manual investigation", recovered)
         db.purge_anonymous_receipts()
         client = httpx.AsyncClient(headers={"user-agent": "quantum-password-generator/2"})
         app.state.entropy = entropy or EntropyService.from_settings(s, client)
