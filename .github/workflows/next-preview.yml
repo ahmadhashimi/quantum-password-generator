@@ -21,14 +21,7 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "22"
-      # TEMPORARY: install generates a candidate lockfile; npm ci replaces this after lock review.
-      - run: npm install --no-fund --no-audit
+      - run: npm ci --no-fund --no-audit
       - run: npm run typecheck
       - run: npm run build
       - run: npm audit --omit=dev --audit-level=high
-      # Print the proposed lockfile for review/reproducibility, not as a deployment artifact.
-      - name: Candidate lockfile for review
-        run: |
-          echo 'CANDIDATE_LOCK_START'
-          cat package-lock.json
-          echo 'CANDIDATE_LOCK_END'
