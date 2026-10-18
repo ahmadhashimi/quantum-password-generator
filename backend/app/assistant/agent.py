@@ -294,6 +294,10 @@ class Assistant:
             outbox: list[dict] = []
             try:
                 async with asyncio.timeout(STREAM_TIMEOUT_S):
+                    extra_options = (
+                        {} if self.model == "claude-haiku-5-5" else
+                        {"betas": ["server-side-fallback-2026-07-01"], "fallbacks": "default"}
+                    )
                     runner = self.client.beta.messages.tool_runner(
                         model=self.model,
                         max_tokens=self.limits.max_tokens,
@@ -304,9 +308,8 @@ class Assistant:
                         messages=list(conv.messages),
                         thinking={"type": "adaptive"},
                         output_config={"effort": "low"},
-                        betas=["server-side-fallback-2026-07-01"],
-                        fallbacks="default",
                         max_iterations=self.limits.max_tool_iterations,
+                        **extra_options,
                     )
                     async for message in runner:
                         usage.add(message.usage, getattr(message, "model", self.model))
