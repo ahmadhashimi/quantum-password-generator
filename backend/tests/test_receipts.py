@@ -304,6 +304,7 @@ def test_interrupted_draw_reuses_persisted_seed(client):
 
 def test_audit_chain_detects_field_tampering(client):
     from sqlmodel import Session
+
     from app import db
     commit_and_run(client, ["one", "two"], winners=1)
     assert db.verify_audit_chain()["valid"] is True
