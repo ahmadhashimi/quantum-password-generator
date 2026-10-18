@@ -51,7 +51,7 @@ export function Story() {
           <Sparkles className="size-5 text-cyan-400" aria-hidden />
           <h3 className="font-semibold">The solution</h3>
           <p className="text-sm text-slate-600 dark:text-slate-400">
-            Real quantum entropy (IBM Quantum, ANU, LfD) with NIST SP 800-90B health tests, always mixed with the OS
+            Real quantum entropy (IBM Quantum, ANU, LfD) with SP 800-90B-inspired health screening (not certified), always mixed with the OS
             RNG so it is never weaker than standard practice.
           </p>
         </div>
