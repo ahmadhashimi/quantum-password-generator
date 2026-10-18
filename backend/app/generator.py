@@ -98,6 +98,22 @@ def generate_passphrase(stream: KeyStream, words: int, separator: str = "-", cap
     return separator.join(picked), bits
 
 
+SELECTION_ALGORITHM = "qpg-select/1"
+
+
+def select_winners(seed: bytes, entries: list[str], winners: int) -> list[int]:
+    """qpg-select/1: winners are a pure function of (64-byte seed, canonical entry list, count).
+
+    KeyStream(seed) = HMAC-SHA512(seed, counter_be64) blocks, consumed in order; uniform_index draws 1 byte for
+    n <= 256 else 2 bytes big-endian, rejecting values >= floor(2^(8k)/n)*n; then a partial Fisher-Yates
+    shuffle over indexes 0..len(entries)-1 of the sorted, normalised list. Publishing the seed after the draw
+    lets anyone recompute the winners offline.
+    """
+    if len(seed) != 64:
+        raise ValueError("selection seed must be 64 bytes")
+    return draw_winners(KeyStream(seed), entries, winners)
+
+
 def draw_winners(stream: KeyStream, entries: list[str], winners: int) -> list[int]:
     """Pick `winners` distinct indexes uniformly (partial Fisher-Yates with unbiased sampling)."""
     if not 0 < winners <= len(entries):

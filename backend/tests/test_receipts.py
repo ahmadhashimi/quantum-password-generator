@@ -53,7 +53,7 @@ def test_password_with_receipt_end_to_end(client):
     rid = r["receipt"]["payload"]["receipt_id"]
     assert r["password"] not in str(r["receipt"])
     stored = client.get(f"/api/v2/receipts/{rid}").json()
-    assert stored == {"payload": r["receipt"]["payload"], "signatures": r["receipt"]["signatures"]}
+    assert stored == r["receipt"]  # the public log returns the exact receipt that was issued
 
     v = client.post("/api/v2/receipts/verify", json={"receipt_id": rid, "value": r["password"],
                                                      "salt": r["receipt_salt"]}).json()
@@ -101,8 +101,12 @@ def test_commit_then_run_draw(client):
 
 def test_draw_runs_exactly_once(client):
     c = client.post("/api/v2/draws", json={"title": "t", "entries": ["a", "b", "c"], "winners": 1}).json()
-    assert client.post(f"/api/v2/draws/{c['draw_id']}/run").status_code == 200
-    assert client.post(f"/api/v2/draws/{c['draw_id']}/run").status_code == 409  # no second roll
+    first = client.post(f"/api/v2/draws/{c['draw_id']}/run")
+    again = client.post(f"/api/v2/draws/{c['draw_id']}/run")
+    assert first.status_code == again.status_code == 200
+    # A retry replays the stored outcome — same receipt, same winners, no fresh randomness.
+    assert again.json()["replayed"] is True and again.headers["Idempotent-Replayed"] == "true"
+    assert again.json()["receipt"] == first.json()["receipt"]
 
 
 def test_rerolls_are_publicly_visible(client):

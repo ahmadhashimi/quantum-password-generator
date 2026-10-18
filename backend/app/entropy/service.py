@@ -43,7 +43,8 @@ class Provenance:
             "quantum": self.quantum,
             "quantum_bytes": self.quantum_bytes,
             "mixed_with": "os_csprng",
-            "failures": self.failures,
+            # Public responses carry coarse failure codes only; raw provider errors can leak account details.
+            "failures": {name: "unavailable" for name in self.failures},
             # Every contributing source passed SP 800-90B RCT + APT; failing sources are excluded above.
             "health": {"sp800_90b": "pass" if self.sources != ["os_csprng"] else "n/a"},
             "timestamp": self.timestamp,
@@ -208,7 +209,8 @@ class EntropyService:
         full = self._status()
         if detail:
             return full
-        keep = ("name", "quantum", "configured", "available", "state", "mode", "pool_bytes")
+        keep = ("name", "quantum", "configured", "available", "state", "mode", "pool_bytes", "last_success_at",
+                "last_harvest_at", "jobs_last_24h")
         return {**full, "providers": [{k: p[k] for k in keep if k in p} | {"error": bool(p.get("last_error"))}
                                       for p in full["providers"]]}
 
@@ -247,4 +249,5 @@ class EntropyService:
                            "samples": h.monitor.samples, "failures": h.monitor.failures},
             })
         quantum_ready = any(p["available"] and p["quantum"] for p in providers)
-        return {"quantum_available": quantum_ready, "fallback": "os_csprng", "providers": providers}
+        return {"quantum_available": quantum_ready, "fallback": "os_csprng", "providers": providers,
+                "checked_at": time.time()}

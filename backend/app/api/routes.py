@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -8,14 +9,14 @@ from ..auth import CurrentUser, optional_user, require_admin, require_user
 from ..config import Settings, get_settings
 from ..entropy import EntropyService
 from ..generator import PasswordOptions, generate_passphrase, generate_password
-from ..ratelimit import general_limit, limiter
+from ..ratelimit import DRAWS_PER_USER_PER_DAY, general_limit, limiter
 from ..receipts import build_receipt
 from .deps import get_entropy, get_signer
 
 router = APIRouter()
 Entropy = Annotated[EntropyService, Depends(get_entropy)]
 MaybeUser = Annotated[CurrentUser | None, Depends(optional_user)]
-VERSION = "2.0.0"
+VERSION = "2.1.0"
 
 
 async def _with_receipt(request: Request, body: dict, user: CurrentUser | None, kind: str, provenance: dict,
@@ -117,6 +118,29 @@ async def public_config(s: Annotated[Settings, Depends(get_settings)]):
 async def me(request: Request, user: Annotated[CurrentUser, Depends(require_user)]):
     stats = await run_in_threadpool(db.user_stats, user.id)
     return {"id": user.id, "email": user.email, "name": user.name, "is_admin": user.is_admin, "stats": stats}
+
+
+@router.get("/api/v2/me/receipts")
+@limiter.limit(general_limit)
+async def my_receipts(request: Request, user: Annotated[CurrentUser, Depends(require_user)],
+                      before: datetime | None = None, limit: Annotated[int, Query(ge=1, le=200)] = 50):
+    """Issuance history: receipt metadata only (receipts never contain secrets)."""
+    items = await run_in_threadpool(db.list_user_receipts, user.id, before, limit)
+    return {"items": items, "next_before": items[-1]["created_at"] if len(items) == limit else None}
+
+
+@router.get("/api/v2/me/usage")
+@limiter.limit(general_limit)
+async def my_usage(request: Request, user: Annotated[CurrentUser, Depends(require_user)],
+                   s: Annotated[Settings, Depends(get_settings)]):
+    usage = await run_in_threadpool(db.usage_summary, user.id)
+    return {**usage, "quotas": {
+        "draws_per_day": DRAWS_PER_USER_PER_DAY,
+        "assistant_messages_per_day": s.assistant_daily_messages_per_user,
+        "assistant_budget_per_day_usd": s.assistant_user_daily_budget_usd,
+        "ibm_seeds_per_day": s.pool_seeds_per_user_per_day,
+        "rate_limit": s.rate_limit_user,
+    }}
 
 
 @router.get("/api/v2/admin/stats")

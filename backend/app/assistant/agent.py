@@ -116,6 +116,14 @@ def crack_time(bits: float, guesses_per_second: float = 1e12) -> str:
     return "instantly"
 
 
+def _fallback_params(model: str) -> dict[str, Any]:
+    """Server-side refusal fallback where the model supports it. Haiku 5.5 has none (a fallback list is a 400),
+    so its refusals are handled client-side like every other model's."""
+    if model.startswith("claude-haiku"):
+        return {}
+    return {"betas": ["server-side-fallback-2026-07-01"], "fallbacks": "default"}
+
+
 def _prices(model: str) -> tuple[float, float, float, float]:
     return PRICING.get(model, PRICING["claude-opus-5-5"])  # unknown model (e.g. a fallback): assume priciest
 
@@ -304,8 +312,7 @@ class Assistant:
                         messages=list(conv.messages),
                         thinking={"type": "adaptive"},
                         output_config={"effort": "low"},
-                        betas=["server-side-fallback-2026-07-01"],
-                        fallbacks="default",
+                        **_fallback_params(self.model),
                         max_iterations=self.limits.max_tool_iterations,
                     )
                     async for message in runner:

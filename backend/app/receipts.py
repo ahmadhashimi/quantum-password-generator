@@ -4,9 +4,15 @@ Each receipt is canonical JSON signed twice — Ed25519 (classical) and ML-DSA-6
 resistant). A receipt is valid only if BOTH signatures verify, so it stays trustworthy unless both schemes
 are broken.
 
-Secrets never appear in a receipt. For passwords the receipt holds a commitment SHA-512(salt || value);
-the salt goes only to the user, who can later prove "this receipt is for my password" without revealing it
-to anyone else. Public results (draws, random bytes) are included in clear so anyone can audit them.
+Secrets never appear in a receipt. For passwords, passphrases and random bytes the receipt holds a commitment
+SHA-512(salt || value); the salt goes only to the requester, who can later prove "this receipt is for my secret"
+without revealing it to anyone else. Draw results are public and included in clear, with the selection seed, so
+anyone can recompute the winners.
+
+Three things are kept separate when verifying (see `verify_receipt`):
+- integrity: both signatures verify under a published, non-revoked key — cryptographic, checkable by anyone;
+- provenance: the sources / IBM jobs / health status the server *reports* — operator-asserted, not proven;
+- quantum evidence: independently authenticated proof of quantum origin — none is available today.
 """
 
 import base64
@@ -23,8 +29,12 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 from cryptography.hazmat.primitives.asymmetric.mldsa import MLDSA65PrivateKey, MLDSA65PublicKey
 
-RECEIPT_VERSION = "qpg-receipt/1"
+from .receipt_schema import V2, validate_payload
+
+RECEIPT_VERSION = V2
 ALGORITHMS = ("ed25519", "ml-dsa-65")
+EVIDENCE = {"integrity": "hybrid-signature:ed25519+ml-dsa-65", "provenance": "operator-asserted",
+            "quantum_evidence": "none"}
 # Domain separation (as in the IETF LAMPS composite-signature design): each signature covers a label naming the
 # hybrid scheme, so a receipt's Ed25519 or ML-DSA signature can't be lifted out and presented as a stand-alone
 # single-algorithm signature over the same payload.
@@ -40,8 +50,12 @@ def unb64(text: str) -> bytes:
 
 
 def canonical(payload: dict) -> bytes:
-    """Deterministic encoding that both the signer and any verifier reproduce exactly."""
-    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    """Deterministic encoding that both the signer and any verifier reproduce exactly (NaN/Infinity rejected)."""
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode()
+
+
+def key_id_for(ed25519_pk: bytes, mldsa_pk: bytes) -> str:
+    return hashlib.sha256(ed25519_pk + mldsa_pk).hexdigest()[:16]
 
 
 def commitment(value: str, salt: bytes) -> str:
@@ -100,11 +114,7 @@ class Signer:
     def public_keys(self) -> dict:
         ed = self.ed25519.public_key().public_bytes_raw()
         ml = self.mldsa.public_key().public_bytes_raw()
-        return {
-            "key_id": hashlib.sha256(ed + ml).hexdigest()[:16],
-            "ed25519": b64(ed),
-            "ml-dsa-65": b64(ml),
-        }
+        return {"key_id": key_id_for(ed, ml), "ed25519": b64(ed), "ml-dsa-65": b64(ml)}
 
     def sign(self, payload: dict) -> dict:
         msg = SIGNING_DOMAIN + canonical(payload)
@@ -121,9 +131,31 @@ class Keyring:
 
     def __init__(self, active: Signer, retired: list[dict] | None = None):
         self.active = active
-        self._keys = {k["key_id"]: {**k, "status": k.get("status", "retired")} for k in (retired or [])}
+        self._keys: dict[str, dict] = {}
+        for entry in retired or []:
+            k = self._validated(entry)
+            self._keys[k["key_id"]] = k
         pub = active.public_keys()
         self._keys[pub["key_id"]] = {**pub, "status": "active"}
+
+    @staticmethod
+    def _validated(entry: dict) -> dict:
+        """Refuse malformed or mislabelled retired keys at startup instead of failing open later."""
+        try:
+            ed, ml = unb64(entry["ed25519"]), unb64(entry["ml-dsa-65"])
+            Ed25519PublicKey.from_public_bytes(ed)
+            MLDSA65PublicKey.from_public_bytes(ml)
+        except (KeyError, TypeError, ValueError) as e:
+            raise ValueError(f"RETIRED_SIGNING_KEYS entry is not a valid public key set: {e}") from e
+        if entry.get("key_id") != key_id_for(ed, ml):
+            raise ValueError("RETIRED_SIGNING_KEYS entry key_id does not match its public keys")
+        status = entry.get("status", "retired")
+        if status not in ("retired", "revoked"):
+            raise ValueError("RETIRED_SIGNING_KEYS status must be 'retired' or 'revoked'")
+        if status == "revoked" and not isinstance(entry.get("revoked_at"), int):
+            raise ValueError("revoked keys need an integer revoked_at (unix seconds)")
+        return {"key_id": entry["key_id"], "ed25519": entry["ed25519"], "ml-dsa-65": entry["ml-dsa-65"],
+                "status": status, **({"revoked_at": entry["revoked_at"]} if status == "revoked" else {})}
 
     @classmethod
     def from_settings(cls, path: str | None, env_seeds: str | None, retired_json: str | None) -> "Keyring":
@@ -152,16 +184,56 @@ def verify_signatures(payload: dict, signatures: dict, public_keys: dict) -> dic
     return results
 
 
+_NO_SIGS = {"ed25519": False, "ml-dsa-65": False}
+
+
+def _provenance_verdict(payload: dict) -> dict:
+    prov = payload.get("provenance") if isinstance(payload.get("provenance"), dict) else {}
+    jobs = prov.get("ibm_jobs") or []
+    return {
+        "type": "operator-asserted",
+        "sources": prov.get("sources", []),
+        "quantum": bool(prov.get("quantum")),
+        "ibm_jobs": jobs,
+        "simulator": any(isinstance(j, dict) and j.get("mode") == "simulator" for j in jobs),
+        "health": prov.get("health"),
+        "note": "Reported by the issuing server and covered by its signature, but not independently authenticated: "
+                "IBM does not sign job results and third parties cannot fetch them.",
+    }
+
+
+QUANTUM_EVIDENCE_VERDICT = {
+    "available": False,
+    "note": "No independently authenticated evidence of quantum origin is attached. This is not device-independent "
+            "or certified randomness.",
+}
+
+
 def verify_receipt(payload: dict, signatures: dict, keyring: Keyring) -> dict:
-    """Full check: known key, both signatures, and not issued after the key's revocation."""
+    """Full check, in order: supported version and exact schema, known key, both signatures, revocation.
+
+    Returns the overall `valid` flag plus three separate verdicts (integrity / provenance / quantum evidence).
+    """
+    schema_ok, schema_error = validate_payload(payload)
+    base = {"schema_valid": schema_ok, "schema_error": schema_error,
+            "version_supported": schema_error != "unsupported_version"}
+    if not schema_ok:
+        reason = "unsupported_version" if schema_error == "unsupported_version" else "schema_invalid"
+        return {**base, "valid": False, "reason": reason, "signatures": dict(_NO_SIGS), "key_status": None,
+                "integrity": {"valid": False, "reason": reason}, "provenance": None,
+                "quantum_evidence": QUANTUM_EVIDENCE_VERDICT}
     key = keyring.get(payload.get("key_id"))
     if key is None:
-        return {"valid": False, "reason": "unknown_key", "signatures": {"ed25519": False, "ml-dsa-65": False}}
+        return {**base, "valid": False, "reason": "unknown_key", "signatures": dict(_NO_SIGS), "key_status": None,
+                "integrity": {"valid": False, "reason": "unknown_key"}, "provenance": _provenance_verdict(payload),
+                "quantum_evidence": QUANTUM_EVIDENCE_VERDICT}
     sigs = verify_signatures(payload, signatures, key)
-    revoked = key["status"] == "revoked" and (
-        not isinstance(payload.get("issued_at"), int) or payload["issued_at"] >= key.get("revoked_at", 0))
+    revoked = key["status"] == "revoked" and payload["issued_at"] >= key.get("revoked_at", 0)
     reason = "revoked_key" if revoked else (None if all(sigs.values()) else "bad_signature")
-    return {"valid": reason is None, "reason": reason, "signatures": sigs, "key_status": key["status"]}
+    return {**base, "valid": reason is None, "reason": reason, "signatures": sigs, "key_status": key["status"],
+            "integrity": {"valid": reason is None, "reason": reason, "signatures": sigs, "key_id": key["key_id"],
+                          "key_status": key["status"]},
+            "provenance": _provenance_verdict(payload), "quantum_evidence": QUANTUM_EVIDENCE_VERDICT}
 
 
 def build_receipt(signer: Signer, kind: str, provenance: dict, *, entropy_bits: float | None = None,
@@ -175,13 +247,17 @@ def build_receipt(signer: Signer, kind: str, provenance: dict, *, entropy_bits: 
         "issued_at": int(time.time()),
         "kind": kind,
         "key_id": signer.public_keys()["key_id"],
+        "evidence": dict(EVIDENCE),
         "provenance": {k: provenance[k] for k in ("sources", "quantum", "quantum_bytes", "mixed_with")}
         | {k: provenance[k] for k in ("ibm_jobs", "health") if k in provenance},
-        "entropy_bits": round(entropy_bits, 2) if entropy_bits is not None else None,
+        "entropy_bits": float(round(entropy_bits, 2)) if entropy_bits is not None else None,
         "commitment": commitment(secret_value, salt) if secret_value is not None and salt else None,
         "result": public_result,
         "details": details or {},
     }
+    ok, error = validate_payload(payload)
+    if not ok:  # never sign something verifiers would reject
+        raise ValueError(f"refusing to sign an invalid receipt payload: {error}")
     return {"payload": payload, "signatures": signer.sign(payload), "algorithms": list(ALGORITHMS)}, (
         b64(salt) if salt else None)
 

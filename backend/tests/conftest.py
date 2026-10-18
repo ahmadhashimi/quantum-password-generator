@@ -6,12 +6,31 @@ os.environ.setdefault("ENVIRONMENT", "development")
 os.environ.setdefault("ALLOWED_HOSTS", '["testserver", "localhost"]')
 
 
+# Run the suite against PostgreSQL by setting QPG_TEST_DATABASE_URL (CI matrix, or a local cluster);
+# otherwise every test gets its own SQLite file. Postgres tests reset the schema and apply migrations.
+PG_URL = os.environ.get("QPG_TEST_DATABASE_URL")
+
+
+def _reset_postgres_schema(url: str) -> None:
+    from sqlalchemy import create_engine, text
+
+    eng = create_engine(url)
+    with eng.begin() as conn:
+        conn.execute(text("DROP SCHEMA public CASCADE"))
+        conn.execute(text("CREATE SCHEMA public"))
+    eng.dispose()
+
+
 @pytest.fixture(autouse=True)
 def _isolated_settings(tmp_path, monkeypatch):
     from app import db
     from app.config import get_settings
 
-    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'test.db'}")
+    if PG_URL:
+        _reset_postgres_schema(PG_URL)
+        monkeypatch.setenv("DATABASE_URL", PG_URL)
+    else:
+        monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'test.db'}")
     monkeypatch.setenv("SIGNING_KEY_PATH", str(tmp_path / "signing_keys.json"))
     for var in ("ANU_API_KEY", "IBM_QUANTUM_TOKEN", "ANTHROPIC_API_KEY", "CLERK_SECRET_KEY", "CLERK_WEBHOOK_SECRET"):
         monkeypatch.delenv(var, raising=False)

@@ -28,6 +28,11 @@ class KeyStream:
         self._counter = 0
         self._buf = b""
 
+    @property
+    def key(self) -> bytes:
+        """The 64-byte key. Only ever exposed for public draws, where it is published as the selection seed."""
+        return self._key
+
     def read(self, n: int) -> bytes:
         while len(self._buf) < n:
             block = hmac.new(self._key, self._counter.to_bytes(8, "big"), hashlib.sha512).digest()

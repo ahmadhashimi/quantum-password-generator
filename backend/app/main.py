@@ -14,6 +14,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from . import db
+from .api import admin as admin_api
 from .api import assistant as assistant_api
 from .api import receipts as receipts_api
 from .api import routes, webhooks
@@ -34,11 +35,17 @@ def create_app(settings: Settings | None = None, entropy: EntropyService | None 
         install_log_redaction()
         db.init_db()
         db.purge_anonymous_receipts()
+        db.purge_idempotency()
+        # Single-instance service: any draw still `seeded` at startup was interrupted mid-run. Never re-run it.
+        for draw_id in db.mark_stuck_draws(older_than_s=0):
+            logging.getLogger(__name__).warning("draw %s interrupted after seeding; needs investigation", draw_id)
         client = httpx.AsyncClient(headers={"user-agent": "quantum-password-generator/2"})
         app.state.entropy = entropy or EntropyService.from_settings(s, client)
         app.state.keyring = (Keyring(signer) if signer else
                              Keyring.from_settings(s.signing_key_path, s.signing_keys, s.retired_signing_keys))
         app.state.signer = app.state.keyring.active
+        db.audit("system", "key.loaded", app.state.signer.public_keys()["key_id"],
+                 {"retired_keys": len(app.state.keyring.public()) - 1})
         if app.state.entropy.harvester:
             app.state.entropy.harvester.start()
         app.state.assistant = assistant or (
@@ -63,6 +70,7 @@ def create_app(settings: Settings | None = None, entropy: EntropyService | None 
     app.include_router(assistant_api.router)
     app.include_router(webhooks.router)
     app.include_router(receipts_api.router)
+    app.include_router(admin_api.router)
 
     dist = Path(s.frontend_dist)
     if (dist / "index.html").exists():
